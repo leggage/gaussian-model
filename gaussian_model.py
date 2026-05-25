@@ -55,20 +55,46 @@ class GaussianModel:
         return 1/(sqrt((2*pi)**3*torch.det(self._cov_ray))*torch.det(torch.inverse(self._jco)))*exp(-0.5*(diff).T@torch.inverse(cov_2d)@diff)
 
 
+def alpha_blending(gaussian_list,x):   ###gaussian-kernel排序按照射线积分路径顺序，先被积分的在列表前面
+    pixel = 0
+    for idx,item in enumerate(gaussian_list):
+        j = 0
+        T = 1
+        while j<idx:
+            T = T*(1-gaussian_list[j].footprint(x))
+            j = j+1
+        pixel = pixel + item._col*T*item.footprint(x)
+    return pixel
+        
+
 
 
 if __name__ == "__main__":
     cenp = torch.tensor([1,2,3])
+    cenp1 = torch.tensor([4,1,5])
+
     cov_s = torch.tensor([[1,0,0],[0,3,0],[0,0,4]])
+    cov_s1= torch.tensor([[2,0,0],[0,2,0],[0,0,4]])
+
     color =1
     density =2
+
     w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]])
     c = torch.tensor([0,0,0])
 
     pixel = torch.tensor([1,2])
 
     gs = GaussianModel(cenp,cov_s,color,density)
+    gs1 = GaussianModel(cenp1,cov_s1,color,density)
+
     gs._o2c(w,c)
     gs._c2r()
-    foot = gs.footprint(pixel)
-    print(foot)
+
+    gs1._o2c(w,c)
+    gs1._c2r()
+    gaussian_lis = [gs,gs1]
+    res = alpha_blending(gaussian_lis,pixel)
+    print(res)
+
+    # foot = gs.footprint(pixel)
+    # print(foot)
