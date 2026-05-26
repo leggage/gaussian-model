@@ -70,17 +70,19 @@ def alpha_blending(gaussian_list,x):   ###gaussian-kernel排序按照射线积�
 
 
 if __name__ == "__main__":
-    cenp = torch.tensor([1,2,3])
-    cenp1 = torch.tensor([4,1,5])
+    cenp = torch.tensor([1,2,3], dtype=torch.float32)
+    cenp1 = torch.tensor([4,1,5], dtype=torch.float32)
 
-    cov_s = torch.tensor([[1,0,0],[0,3,0],[0,0,4]])
-    cov_s1= torch.tensor([[2,0,0],[0,2,0],[0,0,4]])
+    cov_s = torch.tensor([[1,0,0],[0,3,0],[0,0,4]], dtype=torch.float32)
+    cov_s1= torch.tensor([[2,0,0],[0,2,0],[0,0,4]], dtype=torch.float32)
 
     color =1
     density =2
 
-    w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]])
-    c = torch.tensor([0,0,0])
+    w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]], dtype=torch.float32)
+    c = torch.tensor([0,0,0], dtype=torch.float32)
+    w2 = torch.tensor([[1,0,0],[5,1,2],[2,0,1]], dtype=torch.float32)
+    c2 = torch.tensor([10,-1,0], dtype=torch.float32)
 
     pixel = torch.tensor([1,2])
 
@@ -96,5 +98,12 @@ if __name__ == "__main__":
     res = alpha_blending(gaussian_lis,pixel)
     print(res)
 
-    # foot = gs.footprint(pixel)
-    # print(foot)
+    from gaussian_visualize import visualize_gaussians_world
+
+    visualize_gaussians_world(
+        gaussian_list=gaussian_lis,
+        cameras=[(w, c), (w2, c2)],
+        resolution=64,
+        iso_level=1.0,
+        z_offset=1.0,
+    )
