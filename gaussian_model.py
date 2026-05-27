@@ -2,8 +2,11 @@
 from math import exp, pi, sqrt
 from operator import inv
 from turtle import end_fill
-import torch
 
+from numpy import dtype
+import torch
+from util_vis import visualize_gaussian as gvs
+import open3d as o3d
 ###for a gaussian in a frame ,
 
 class GaussianModel:
@@ -73,10 +76,11 @@ if __name__ == "__main__":
     cenp = torch.tensor([1,2,3])
     cenp1 = torch.tensor([4,1,5])
 
-    cov_s = torch.tensor([[1,0,0],[0,3,0],[0,0,4]])
-    cov_s1= torch.tensor([[2,0,0],[0,2,0],[0,0,4]])
+    cov_s = torch.tensor([[1,0,0],[0,3,0],[0,0,4]],dtype = torch.float32)
+    cov_s1= torch.tensor([[2,0,0],[0,2,0],[0,0,4]],dtype = torch.float32)
 
-    color =1
+    color1 = torch.tensor([0.1,0.4,0.7])
+    color2 = torch.tensor([0.2,0.3,0.2])
     density =2
 
     w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]])
@@ -84,17 +88,29 @@ if __name__ == "__main__":
 
     pixel = torch.tensor([1,2])
 
-    gs = GaussianModel(cenp,cov_s,color,density)
-    gs1 = GaussianModel(cenp1,cov_s1,color,density)
+    gs = GaussianModel(cenp,cov_s,color1,density)
+    gs1 = GaussianModel(cenp1,cov_s1,color2,density)
 
-    gs._o2c(w,c)
-    gs._c2r()
+    gaussian_list = [gs,gs1]
 
-    gs1._o2c(w,c)
-    gs1._c2r()
-    gaussian_lis = [gs,gs1]
-    res = alpha_blending(gaussian_lis,pixel)
-    print(res)
+    geo_gaussians = []
+
+    for gaussian in gaussian_list:
+        geo_gaussian = gvs(gaussian._cen_obj,gaussian._cov_obj,color=gaussian._col)
+        geo_gaussians.append(geo_gaussian)
+    frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
+    o3d.visualization.draw_geometries(geo_gaussians+[frame])
+
+
+
+    # gs._o2c(w,c)
+    # gs._c2r()
+
+    # gs1._o2c(w,c)
+    # gs1._c2r()
+    # gaussian_lis = [gs,gs1]
+    # res = alpha_blending(gaussian_lis,pixel)
+    # print(res)
 
     # foot = gs.footprint(pixel)
     # print(foot)
