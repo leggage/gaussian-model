@@ -2,10 +2,10 @@
 from math import exp, pi, sqrt
 from operator import inv
 from turtle import end_fill
-
+from pandas.io.formats.style import plt
 from numpy import dtype
 import torch
-from util_vis import visualize_gaussian as gvs
+from util_vis import draw_camera, visualize_gaussian as gvs
 import open3d as o3d
 ###for a gaussian in a frame ,
 
@@ -70,38 +70,76 @@ def alpha_blending(gaussian_list,x):   ###gaussian-kernel排序按照射线积�
     return pixel
         
 
+def rasterization(image,gaussian_list,K):
+    H,W = image.shape[:2]
+    image_processed = image
+    for i in range(H):
+        for j in range(W):
+            coord_pixel = torch.tensor([i,j,1],dtype =torch.float32)
+            coord_ray_zeq1 = torch.inverse(K)@coord_pixel
+            color = alpha_blending(gaussian_list,coord_ray_zeq1[:2])
+            image_processed[i,j,:] = color
+    return image_processed
 
 
 if __name__ == "__main__":
-    cenp = torch.tensor([1,2,3])
-    cenp1 = torch.tensor([4,1,5])
+    cenp = torch.tensor([1,2,3],dtype = torch.float32)
+    cenp1 = torch.tensor([4,1,5],dtype = torch.float32)
 
     cov_s = torch.tensor([[1,0,0],[0,3,0],[0,0,4]],dtype = torch.float32)
     cov_s1= torch.tensor([[2,0,0],[0,2,0],[0,0,4]],dtype = torch.float32)
 
-    color1 = torch.tensor([0.1,0.4,0.7])
-    color2 = torch.tensor([0.2,0.3,0.2])
+    color1 = torch.tensor([0.1,0.4,0.7],dtype = torch.float32)
+    color2 = torch.tensor([0.7,0.3,0.2],dtype = torch.float32)
     density =2
 
-    w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]])
-    c = torch.tensor([0,0,0])
-
-    pixel = torch.tensor([1,2])
+    w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]],dtype = torch.float32)
+    c = torch.tensor([0,0,0],dtype = torch.float32)
 
     gs = GaussianModel(cenp,cov_s,color1,density)
-    gs1 = GaussianModel(cenp1,cov_s1,color2,density)
+    gs1 = GaussianModel(cenp1,cov_s1,color2,density)   
+    gs._o2c(w,c)
+    gs._c2r()
 
-    gaussian_list = [gs,gs1]
+    gs1._o2c(w,c)
+    gs1._c2r()
+    gaussian_list = [gs,gs1]    
 
+    
+    rgbimg = torch.rand(512,512,3)
+    # rendered_image = rgbimg[:,:,]
+    intrinsic = torch.tensor([[64,0,256],[0,64,256],[0,0,1]],dtype = torch.float32)
+    plt.subplot(1,2,1)
+    plt.title("original")
+    plt.imshow(rgbimg)
+    rendered_image = rasterization(rgbimg,gaussian_list,intrinsic)
+    rendered_image = (rendered_image - rendered_image.min())/(rendered_image.max()-rendered_image.min()+1e-8)
+    plt.subplot(1,2,2)
+    plt.title("rendered")
+    plt.imshow(rendered_image)
+
+    plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+    camera = draw_camera(w,c,intrinsic=intrinsic)
     geo_gaussians = []
-
     for gaussian in gaussian_list:
         geo_gaussian = gvs(gaussian._cen_obj,gaussian._cov_obj,color=gaussian._col)
         geo_gaussians.append(geo_gaussian)
     frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
-    o3d.visualization.draw_geometries(geo_gaussians+[frame])
+    o3d.visualization.draw_geometries(geo_gaussians+[frame]+[camera])
 
-
+    # pixel = torch.tensor([1,2])
 
     # gs._o2c(w,c)
     # gs._c2r()
