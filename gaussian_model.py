@@ -75,7 +75,7 @@ def rasterization(image,gaussian_list,K):
     image_processed = image
     for i in range(H):
         for j in range(W):
-            coord_pixel = torch.tensor([i,j,1],dtype =torch.float32)
+            coord_pixel = torch.tensor([j,i,1],dtype =torch.float32)   ####gaussian坐标顺序为x,y,z;i实际上对应的是y方向索引，w是x方向。
             coord_ray_zeq1 = torch.inverse(K)@coord_pixel
             color = alpha_blending(gaussian_list,coord_ray_zeq1[:2])
             image_processed[i,j,:] = color
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     color2 = torch.tensor([0.7,0.3,0.2],dtype = torch.float32)
     density =2
 
-    w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]],dtype = torch.float32)
+    w = torch.tensor([[1,0,0],[0,1,0],[0,0,1]],dtype = torch.float32)
     c = torch.tensor([0,0,0],dtype = torch.float32)
 
     gs = GaussianModel(cenp,cov_s,color1,density)
