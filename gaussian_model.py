@@ -94,7 +94,10 @@ if __name__ == "__main__":
     density =2
 
     w = torch.tensor([[1,0,0],[0,1,0],[0,0,1]],dtype = torch.float32)
-    c = torch.tensor([0,0,0],dtype = torch.float32)
+    c = torch.tensor([-1,-2,2],dtype = torch.float32)
+    w1 = torch.tensor([[0,-1,0],[1,0,0],[0,0,1]],dtype = torch.float32)
+    c1 = torch.tensor([0,0,5],dtype = torch.float32)
+    intrinsic = torch.tensor([[256,0,256],[0,256,256],[0,0,1]],dtype = torch.float32)
 
     gs = GaussianModel(cenp,cov_s,color1,density)
     gs1 = GaussianModel(cenp1,cov_s1,color2,density)   
@@ -107,18 +110,18 @@ if __name__ == "__main__":
 
     
     rgbimg = torch.rand(512,512,3)
-    # rendered_image = rgbimg[:,:,]
-    intrinsic = torch.tensor([[64,0,256],[0,64,256],[0,0,1]],dtype = torch.float32)
-    plt.subplot(1,2,1)
-    plt.title("original")
-    plt.imshow(rgbimg)
-    rendered_image = rasterization(rgbimg,gaussian_list,intrinsic)
-    rendered_image = (rendered_image - rendered_image.min())/(rendered_image.max()-rendered_image.min()+1e-8)
-    plt.subplot(1,2,2)
-    plt.title("rendered")
-    plt.imshow(rendered_image)
 
-    plt.show()
+
+    # plt.subplot(1,2,1)
+    # plt.title("original")
+    # plt.imshow(rgbimg)
+    # rendered_image = rasterization(rgbimg,gaussian_list,intrinsic)
+    # rendered_image = (rendered_image - rendered_image.min())/(rendered_image.max()-rendered_image.min()+1e-8)
+    # plt.subplot(1,2,2)
+    # plt.title("rendered")
+    # plt.imshow(rendered_image)
+
+    # plt.show()
 
 
 
@@ -132,6 +135,7 @@ if __name__ == "__main__":
 
 
     camera = draw_camera(w,c,intrinsic=intrinsic)
+    camera1 = draw_camera(w1,c1,intrinsic=intrinsic)
     geo_gaussians = []
     for gaussian in gaussian_list:
         geo_gaussian = gvs(gaussian._cen_obj,gaussian._cov_obj,color=gaussian._col)
