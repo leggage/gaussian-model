@@ -3,7 +3,7 @@ import open3d as o3d
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-import cv
+# import cv
 
 def visualize_gaussian(cen,cov,scale=1,resolution=24,color=None):
     evals,evecs = torch.linalg.eigh(cov)
@@ -35,7 +35,7 @@ def draw_camera(w,c,scale=0.5,width=512,height=512,intrinsic=None):
     camera = o3d.geometry.LineSet.create_camera_visualization(width,height,intrinsic,extrinsic,scale)
     return camera
 
-def draw_camera_texture(w,c,scale=0.5,width=512,height=512,image_z=1,image=None,intrinsic=None):
+def draw_camera_texture(w,c,scale=1,width=512,height=512,image_z=1,image=None,intrinsic=None):
     extrinsic = torch.eye(4,dtype=torch.float32)
     extrinsic[:3,:3] = w
     extrinsic[:3,3] = c
@@ -43,13 +43,14 @@ def draw_camera_texture(w,c,scale=0.5,width=512,height=512,image_z=1,image=None,
         intrinsic = torch.tensor([[width,0,width/2],[0,height,height/2],[0,0,1]],dtype=torch.float32)
     camera = o3d.geometry.LineSet.create_camera_visualization(width,height,intrinsic,extrinsic,scale)
     
-    vertices_pixel = torch.tensor([[-width/2,width/2,-width/2,width/2],
-                             [width/2,width/2,-width/2,-width/2],
-                             [1,1,1,1]])
+    vertices_pixel = torch.tensor([[0,width,0,width],
+                             [0,0,height,height],
+                             [1,1,1,1]],dtype=torch.float32)
     vertices_cam = torch.inverse(intrinsic)@vertices_pixel*image_z
     vertices_cam = torch.cat([vertices_cam,torch.ones(1,vertices_cam.shape[1],dtype=torch.float32)],dim=0)
     vertices_world = torch.inverse(extrinsic)@vertices_cam
     vertices_world = vertices_world[:3,:].T
+
     if image!=None:
         if isinstance(image, torch.Tensor):
             image = image.detach().cpu().numpy()
@@ -59,18 +60,18 @@ def draw_camera_texture(w,c,scale=0.5,width=512,height=512,image_z=1,image=None,
         texture = o3d.geometry.Image(image)
         mesh = o3d.geometry.TriangleMesh()
         mesh.vertices = o3d.utility.Vector3dVector(vertices_world)
-        triangles = np.array(
+        triangles = np.array(               
             [
                 [0, 1, 2],
-                [2, 3, 0],
+                [1, 3, 2],
             ],
             dtype=np.int32,
         )
-        uvs = np.array([[0, 1], [1, 1], [1, 0], [0, 0]], dtype=np.float64)
+        uvs = np.array([[0, 1], [1, 1], [0, 0], [1, 0]], dtype=np.float64)
 
         mesh.triangles =  o3d.utility.Vector3iVector(triangles)
         mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs[triangles.flatten()])
-        mesh.textures = [texture]
+        mesh.textures =[texture]
         mesh.triangle_material_ids = o3d.utility.IntVector([0, 0])
 
     
@@ -102,10 +103,12 @@ def create_grid(size=5, step=1, z=0.0, color=(0.5, 0.5, 0.5)):
 
 if __name__ =="__main__":
 
-    w = torch.tensor([[2,0,0],[0,4,0],[0,0,3]],dtype=torch.float32)
+    w = torch.tensor([[0,-1,0],[1,0,0],[0,0,1]],dtype=torch.float32)
     c = torch.tensor([4,0,7],dtype=torch.float32)
     intrinsic = torch.tensor([[50,0,256],[0,50,256],[0,0,1]],dtype=torch.float32)
     image = torch.rand(512,512,3,dtype=torch.float32)
+    image[:,:256,:] =torch.tensor([1.0, 0.0, 0.0])
+    image[:,256:,:] = torch.tensor([0.0,0.0,1.0])
     camera = draw_camera_texture(w,c,intrinsic=intrinsic,image =image)
     plt.imshow(image)
     plt.show()
