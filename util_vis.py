@@ -28,20 +28,32 @@ def visualize_gaussian(cen,cov,scale=1,resolution=24,color=None):
 
 def draw_camera(w,c,scale=0.5,width=512,height=512,intrinsic=None):
     extrinsic = np.eye(4)
-    extrinsic[:3,:3] = w
-    extrinsic[:3,3] = c
+    extrinsic[:3,:3] = np.asarray(w, dtype=np.float64)
+    extrinsic[:3,3] = np.asarray(c, dtype=np.float64)
     if intrinsic is None:
-        intrinsic = torch.tensor([[width,0,width/2],[0,height,height/2],[0,0,1]])
+        intrinsic = np.array([[width,0,width/2],[0,height,height/2],[0,0,1]])
+    else:
+        intrinsic = np.asarray(intrinsic, dtype=np.float64)
     camera = o3d.geometry.LineSet.create_camera_visualization(width,height,intrinsic,extrinsic,scale)
     return camera
 
 def draw_camera_texture(w,c,scale=1,width=512,height=512,image_z=1,image=None,intrinsic=None):
+    w = torch.as_tensor(w, dtype=torch.float32)
+    c = torch.as_tensor(c, dtype=torch.float32)
     extrinsic = torch.eye(4,dtype=torch.float32)
     extrinsic[:3,:3] = w
     extrinsic[:3,3] = c
     if intrinsic is None:
         intrinsic = torch.tensor([[width,0,width/2],[0,height,height/2],[0,0,1]],dtype=torch.float32)
-    camera = o3d.geometry.LineSet.create_camera_visualization(width,height,intrinsic,extrinsic,scale)
+    else:
+        intrinsic = torch.as_tensor(intrinsic, dtype=torch.float32)
+    camera = o3d.geometry.LineSet.create_camera_visualization(
+        width,
+        height,
+        intrinsic.detach().cpu().numpy(),
+        extrinsic.detach().cpu().numpy(),
+        scale,
+    )
     
     vertices_pixel = torch.tensor([[0,width,0,width],
                              [0,0,height,height],
@@ -51,7 +63,7 @@ def draw_camera_texture(w,c,scale=1,width=512,height=512,image_z=1,image=None,in
     vertices_world = torch.inverse(extrinsic)@vertices_cam
     vertices_world = vertices_world[:3,:].T
 
-    if image!=None:
+    if image is not None:
         if isinstance(image, torch.Tensor):
             image = image.detach().cpu().numpy()
         if image.dtype != np.uint8:
@@ -59,7 +71,7 @@ def draw_camera_texture(w,c,scale=1,width=512,height=512,image_z=1,image=None,in
 
         texture = o3d.geometry.Image(image)
         mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(vertices_world)
+        mesh.vertices = o3d.utility.Vector3dVector(vertices_world.detach().cpu().numpy())
         triangles = np.array(               
             [
                 [0, 1, 2],
