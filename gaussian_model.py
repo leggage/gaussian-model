@@ -50,12 +50,12 @@ class GaussianModel:
 
     def gs_dist_ray(self,x):
         diff = x-self._cen_ray
-        return 1/(sqrt((2*pi)**3*torch.det(self._cov_ray))*torch.det(torch.inverse(self._jco)))*exp(-0.5*(diff).T@torch.inverse(self._cov_ray)@diff)
+        return 1/(sqrt((2*pi)**3*torch.det(self._cov_ray))*torch.det(torch.inverse(self._jco))*torch.det(torch.inverse(self._w_cam)))*exp(-0.5*(diff).T@torch.inverse(self._cov_ray)@diff)
 
     def footprint(self,x):
         diff = x-self._cen_ray[:2]
         cov_2d = self._cov_ray[:2,:2]
-        return 1/(sqrt((2*pi)**3*torch.det(self._cov_ray))*torch.det(torch.inverse(self._jco)))*exp(-0.5*(diff).T@torch.inverse(cov_2d)@diff)
+        return 1/(sqrt((2*pi)**3*torch.det(cov_2d))*torch.det(torch.inverse(self._jco))*torch.det(torch.inverse(self._w_cam)))*exp(-0.5*(diff).T@torch.inverse(cov_2d)@diff)
 
 
 def alpha_blending(gaussian_list,x):   ###gaussian-kernel排序按照射线积分路径顺序，先被积分的在列表前面
@@ -112,16 +112,16 @@ if __name__ == "__main__":
     rgbimg = torch.rand(512,512,3)
 
 
-    # plt.subplot(1,2,1)
-    # plt.title("original")
-    # plt.imshow(rgbimg)
-    # rendered_image = rasterization(rgbimg,gaussian_list,intrinsic)
-    # rendered_image = (rendered_image - rendered_image.min())/(rendered_image.max()-rendered_image.min()+1e-8)
-    # plt.subplot(1,2,2)
-    # plt.title("rendered")
-    # plt.imshow(rendered_image)
+    plt.subplot(1,2,1)
+    plt.title("original")
+    plt.imshow(rgbimg)
+    rendered_image = rasterization(rgbimg,gaussian_list,intrinsic)
+    rendered_image = (rendered_image - rendered_image.min())/(rendered_image.max()-rendered_image.min()+1e-8)
+    plt.subplot(1,2,2)
+    plt.title("rendered")
+    plt.imshow(rendered_image)
 
-    # plt.show()
+    plt.show()
 
 
 
