@@ -4,6 +4,7 @@ import time
 import cupy as cp
 import matplotlib.pyplot as plt
 import numpy as np
+from sympy.plotting.plot import centers_of_faces
 import torch
 
 from gaussian_model import GaussianModel, rasterization
@@ -133,6 +134,13 @@ def render(K, gaussian_list, image=None, image_shape=None, block_size=(16, 16)):
 
     block = (int(block_size[0]), int(block_size[1]))
     grid = ((width + block[0] - 1) // block[0], (height + block[1] - 1) // block[1])
+    print("grid:",grid)
+    print("block",block)
+    print("inv_k:",k_inv)
+    print("weights:",weights)
+    print("cens:",centers)
+    print("inv_covs:",inv_covs)
+    print("colors:",colors)
     _RENDER_KERNEL(
         grid,
         block,
@@ -172,9 +180,15 @@ if __name__ == "__main__":
     color1 = torch.tensor([0.1, 0.4, 0.7], dtype=torch.float32)
     color2 = torch.tensor([0.7, 0.3, 0.2], dtype=torch.float32)
     density = 2
-
     w = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
     c = torch.tensor([-1, -2, 2], dtype=torch.float32)
+    # print("grid:",grid)
+    # print("block",block)
+    # print("inv_k:",inv_k)
+    # print("weights:",weights)
+    # print("cens:",cens)
+    # print("inv_covs:",inv_covs)
+    # print("colors:",colors)
     intrinsic = torch.tensor([[50, 0, 256], [0, 50, 256], [0, 0, 1]], dtype=torch.float32)
 
     gs = GaussianModel(cenp, cov_s, color1, density)
@@ -187,9 +201,9 @@ if __name__ == "__main__":
 
     rgbimg = torch.rand(512, 512, 3)
 
-    start = time.perf_counter()
-    rendered_image = rasterization(rgbimg.clone(), gaussian_list, intrinsic)
-    rasterization_time = time.perf_counter() - start
+    # start = time.perf_counter()
+    # rendered_image = rasterization(rgbimg.clone(), gaussian_list, intrinsic)
+    # rasterization_time = time.perf_counter() - start
 
     cp.cuda.Stream.null.synchronize()
     start = time.perf_counter()
@@ -197,7 +211,7 @@ if __name__ == "__main__":
     cp.cuda.Stream.null.synchronize()
     rasterization_cuda_time = time.perf_counter() - start
 
-    print(f"rasterization time: {rasterization_time:.6f} s")
+    # print(f"rasterization time: {rasterization_time:.6f} s")
     print(f"rasterization_cuda time: {rasterization_cuda_time:.6f} s")
 
     rendered_image_cuda_cpu = rendered_image_cuda.get()
@@ -206,9 +220,9 @@ if __name__ == "__main__":
     plt.title("original")
     plt.imshow(rgbimg.detach().cpu().numpy())
 
-    plt.subplot(1, 3, 2)
-    plt.title("rasterization")
-    plt.imshow(_normalize_for_display(rendered_image))
+    # plt.subplot(1, 3, 2)
+    # plt.title("rasterization")
+    # plt.imshow(_normalize_for_display(rendered_image))
 
     plt.subplot(1, 3, 3)
     plt.title("rasterization_cuda")
