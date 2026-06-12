@@ -109,6 +109,45 @@ void rasterization(int gaussian_num,int image_height,int image_width,float *inv_
 
 """
 
+_grad_code = r"""
+extern "C" __global__
+void compute_grad(float* dl_dpixel,float* dl_dchanel,int ch,int gaussian_num,int image_height,int image_width,float *inv_k,float *weight,float*cen,float*cov,float*colors,float* image)
+{
+
+    float image_x = blockIdx.x*blockDim.x+threadIdx.x;
+    float image_y = blockIdx.y*blockDim.y+threadIdx.y;
+
+
+    float ray_x = image_x*inv_k[0]+image_y*inv_k[1]+inv_k[2];
+    float ray_y = image_x*inv_k[3]+image_y*inv_k[4]+inv_k[5];
+
+    float out_r = 0.0f;
+    float out_g = 0.0f;
+    float out_b = 0.0f;
+    float T =1;
+    for(int i=0;i<gaussian_num;++i){
+        float dx = ray_x - cen[2*i];
+        float dy = ray_y - cen[2*i+1];
+
+        float mahlo = dx*dx*cov[i*4]+dx*dy*(cov[i*4+1]+cov[i*4+2])+dy*dy*cov[i*4+3];
+        float alpha = weight[i]*expf(-0.5*mahlo);
+
+
+        out_r += colors[i * 3 + 0] * T * alpha;
+        out_g += colors[i * 3 + 1] * T * alpha;
+        out_b += colors[i * 3 + 2] * T* alpha;
+
+        T = T*(1-alpha);      
+    }
+
+}
+
+
+"""
+
+
+
+
 render_gpt = cp.RawKernel(_KERNEL_CODE,"render_alpha_blending")
 render_kernel = cp.RawKernel(_kernel_code,"rasterization")
 
@@ -145,7 +184,7 @@ def _as_numpy(value, dtype=np.float32):
 if __name__ == "__main__":
 
     cenp = torch.tensor([1, 2, 3], dtype=torch.float32)
-    cenp1 = torch.tensor([4, 1, 5], dtype=torch.float32)
+    cenp1 = torch.tensor([2, 2, 4], dtype=torch.float32)
 
     cov_s = torch.tensor([[1, 0, 0], [0, 3, 0], [0, 0, 4]], dtype=torch.float32)
     cov_s1 = torch.tensor([[2, 0, 0], [0, 2, 0], [0, 0, 4]], dtype=torch.float32)
@@ -235,6 +274,7 @@ if __name__ == "__main__":
     # plt.title("random_init")
     # plt.imshow(random_image)
     pr_cens = torch.randn([len(gaussian_list),2],device="cuda",requires_grad=True)
+    # pr_cens = cens_cuda.clone().requires_grad_(True)
     pr_colors = torch.randn([len(gaussian_list),3],device="cuda",requires_grad=True)
     optimizer = torch.optim.Adam([
         {"params": [pr_cens],  "lr": 0.001},
@@ -244,7 +284,7 @@ if __name__ == "__main__":
 
 
 
-    for step in range(30000):
+    for step in range(3000):
         optimizer.zero_grad()
         pr_image = render_torch(height,width,inv_k_cuda,pr_cens,inv_covs_cuda,weights_cuda,pr_colors)
         # print("pr_image max:", pr_image.max().item())
@@ -255,6 +295,7 @@ if __name__ == "__main__":
         if step%100 ==0:
             print("iter:",step,"loss:",loss.item())
             print("训练后 pr_colors:",pr_colors.detach().cpu().numpy())
+            print(" gt_cens:",cens_cuda.detach().cpu().numpy())
             print("训练后 pr_cens:",pr_cens.detach().cpu().numpy())
 
 
