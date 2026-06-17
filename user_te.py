@@ -141,9 +141,65 @@ void compute_color_gradv2(float* dl_dpixel,float* dl_dcolor,int ch,int gaussian_
             atomicAdd(&dl_dcolor[i * 3 + j], dl_dp * dpixel_dcolor);
 
         }
+
+
         T = T*(1-alpha);
         if (T < 1e-4f) break;
     }
+
+}
+
+"""
+
+
+_preprocess_code = r"""
+//假设这里的gaussian参数为已经排序好的scene_gaussian,ray-space
+void cuda_process(float* cens,float *covs,float* colors,float* weights,float* point,float* range, int gaussian_nums,int image_height,int image_width,float* K)
+{
+
+    int u = blockIdx.x*blockDim.x+threadIdx.x;
+    int v = blockIdx.y*blockDim.y+threadIdx.y;
+
+    int blockid = blockIdx.y*(image_width/blockDim.x)+blockIdx.x;
+    int vmax =1000;              //假设一个tile中最多可存在的有效gaussian数量
+    int valid = 0;               //有效高斯计数
+    float cen_u,cen_v;           //高斯中心点像素坐标系
+    float cen_x,cen_y;           //高斯中心点透视坐标系
+
+    for(int i=0;i<gaussian_nums;i++)
+    {
+        if(valid<1000)
+        {
+            cen_x = cens[i*2];
+            cen_y = cens[i*2+1];
+
+            cen_u = cen_x*K[0]+cen_y*K[1]+K[2];
+            cen_y = cen_x*K[3]+cen_y*K[4]+K[5];
+
+            //求像素坐标系下的高斯协方差矩阵,只有二维,理论上为K[:2,:2]@covs@K[:2,:2].T
+            float* cov_p = K[:2,:2]@covs@K[:2,:2].T;
+
+            //对cov_p特征值分解,确定99%置信区间:3sigma,sigma=sqrt(max(lamda));
+            float a = cov_p[0];
+            float b = cov_p[1];
+            float c = cov_p[2];
+            float d = cov_p[3];
+            float lamda1 = 0.5*((a+d)+sqrt((a+d)**2-4*(a*d-b*c)));
+            float lamda2 = 0.5*((a+d)-sqrt((a+d)**2-4*(a*d-b*c)));
+
+            radii = 3*sqrt(max(lamda1,lamda2));
+            dis = sqrt((u-cen_u)**2+(v-cen_v)**2);
+            //判读pixel点是否在这个置信圆中,比较raddi和dis,若dis<raddi则在。
+            if(dis<radii)
+            {
+                point[blockid*vmax+valid] = i;
+                valid++;
+            }
+        }   
+    }
+    range[blockid*2] = blockid*vmax;        //tile有效高斯索引列表在point数组的起始地址
+    range[blockid*2+1] = blockid*vmax+valid;  //tile有效高斯索引列表在point数组的终止地址
+
 
 }
 
