@@ -10,7 +10,7 @@ import open3d as o3d
 ###for a gaussian in a frame ,
 
 class GaussianModel:
-    def __init__(self,cenp,cov,color,density) -> None:
+    def __init__(self,cenp,cov,color,opacity) -> None:
         self._cen_obj = cenp
         self._cov_obj = cov
 
@@ -23,7 +23,7 @@ class GaussianModel:
         self._jco = None
 
         self._col = color
-        self.density = density
+        self.opacity= opacity
 
 
         pass
@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
     color1 = torch.tensor([0.1,0.4,0.7],dtype = torch.float32)
     color2 = torch.tensor([0.7,0.3,0.2],dtype = torch.float32)
-    density =2
+    opacity = 0.9
 
     w = torch.tensor([[1,0,0],[0,1,0],[0,0,1]],dtype = torch.float32)
     c = torch.tensor([-1,-2,2],dtype = torch.float32)
@@ -99,8 +99,8 @@ if __name__ == "__main__":
     c1 = torch.tensor([0,0,5],dtype = torch.float32)
     intrinsic = torch.tensor([[256,0,256],[0,256,256],[0,0,1]],dtype = torch.float32)
 
-    gs = GaussianModel(cenp,cov_s,color1,density)
-    gs1 = GaussianModel(cenp1,cov_s1,color2,density)   
+    gs = GaussianModel(cenp,cov_s,color1,opacity)
+    gs1 = GaussianModel(cenp1,cov_s1,color2,opacity)   
     gs._o2c(w,c)
     gs._c2r()
 

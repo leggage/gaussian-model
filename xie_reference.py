@@ -164,25 +164,32 @@ if __name__ == "__main__":
 
     cenp = torch.tensor([1, 2, 3], dtype=torch.float32)
     cenp1 = torch.tensor([4, 1, 5], dtype=torch.float32)
+    cenp2 = torch.tensor([2, 2, 0], dtype=torch.float32)
 
     cov_s = torch.tensor([[1, 0, 0], [0, 3, 0], [0, 0, 4]], dtype=torch.float32)
     cov_s1 = torch.tensor([[2, 0, 0], [0, 2, 0], [0, 0, 4]], dtype=torch.float32)
+    cov_s2 = torch.tensor([[0.5, 0, 0], [0, 1, 0], [0, 0, 6]], dtype=torch.float32)
 
     color1 = torch.tensor([0.1, 0.4, 0.7], dtype=torch.float32)
     color2 = torch.tensor([0.7, 0.3, 0.2], dtype=torch.float32)
-    density = 2
+    color3 = torch.tensor([0.4, 0.7, 0.2], dtype=torch.float32) 
+
+    opacity = 0.9
 
     w = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
     c = torch.tensor([-1, -2, 2], dtype=torch.float32)
     intrinsic = torch.tensor([[50, 0, 256], [0, 50, 256], [0, 0, 1]], dtype=torch.float32)
 
-    gs = GaussianModel(cenp, cov_s, color1, density)
-    gs1 = GaussianModel(cenp1, cov_s1, color2, density)
+    gs = GaussianModel(cenp, cov_s, color1, opacity)
+    gs1 = GaussianModel(cenp1, cov_s1, color2, opacity)
+    gs2 = GaussianModel(cenp2, cov_s2, color3, opacity)
     gs._o2c(w, c)
     gs._c2r()
     gs1._o2c(w, c)
     gs1._c2r()
-    gaussian_list = [gs, gs1]
+    gs2._o2c(w, c)
+    gs2._c2r()
+    gaussian_list = [gs, gs1,gs2]
 
     block_size = cp.asarray([16,16],dtype = int)
 

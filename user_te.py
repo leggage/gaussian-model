@@ -111,6 +111,67 @@ void rasterization(int gaussian_num,int image_height,int image_width,float *inv_
 
 """
 
+_rasterization_code = r"""
+extern "C" __global__
+void rasterization_v2(int gaussian_num,int image_height,int image_width,float *inv_k,float *weight,float*cen,float*cov,float*colors,float* image,int* point,int* range)
+{
+    int image_x = blockIdx.x*blockDim.x+threadIdx.x;
+    int image_y = blockIdx.y*blockDim.y+threadIdx.y;
+    if (image_x >= image_width || image_y >= image_height) return;
+
+    int blockid = blockIdx.y*(image_width/blockDim.x)+blockIdx.x;
+
+    float ray_x = image_x*inv_k[0]+image_y*inv_k[1]+inv_k[2];
+    float ray_y = image_x*inv_k[3]+image_y*inv_k[4]+inv_k[5];
+
+    int rangex = range[blockid*2];
+    int rangey = range[blockid*2+1];
+
+    float out_r = 0.0f;
+    float out_g = 0.0f;
+    float out_b = 0.0f;
+    float T =1;
+
+    for(int i=rangex;i<rangey;i++){
+        int gid = point[i];
+        float dx = ray_x - cen[2*gid];
+        float dy = ray_y - cen[2*gid+1];
+
+        float mahlo = dx*dx*cov[gid*4]+dx*dy*(cov[gid*4+1]+cov[gid*4+2])+dy*dy*cov[gid*4+3];
+        float alpha = weight[gid]*expf(-0.5*mahlo);
+        alpha = fminf(fmaxf(alpha, 0.0f), 0.99f);
+
+        out_r += colors[gid * 3 + 0] * T * alpha;
+        out_g += colors[gid * 3 + 1] * T * alpha;
+        out_b += colors[gid * 3 + 2] * T* alpha;
+
+        T = T*(1-alpha);          
+    }
+//
+    for(int i=0;i<gaussian_num;++i){
+        float dx = ray_x - cen[2*i];
+        float dy = ray_y - cen[2*i+1];
+
+        float mahlo = dx*dx*cov[i*4]+dx*dy*(cov[i*4+1]+cov[i*4+2])+dy*dy*cov[i*4+3];
+        float alpha = weight[i]*expf(-0.5*mahlo);
+        alpha = fminf(fmaxf(alpha, 0.0f), 0.99f);
+
+        out_r += colors[i * 3 + 0] * T * alpha;
+        out_g += colors[i * 3 + 1] * T * alpha;
+        out_b += colors[i * 3 + 2] * T* alpha;
+
+        T = T*(1-alpha);      
+    }
+//
+    const int offset = (image_y * image_width + image_x) * 3;
+    image[offset + 0] = out_r;
+    image[offset + 1] = out_g;
+    image[offset + 2] = out_b;
+}
+
+
+"""
+
 _grad_code = r"""
 extern "C" __global__
 void compute_color_gradv2(float* dl_dpixel,float* dl_dcolor,int ch,int gaussian_num,int image_height,int image_width,float *inv_k,float *weight,float*cen,float*cov)
@@ -153,52 +214,77 @@ void compute_color_gradv2(float* dl_dpixel,float* dl_dcolor,int ch,int gaussian_
 
 
 _preprocess_code = r"""
+__device__  __forceinline__
+void mat2dmul(float* mat1,float* mat2,float* res)//res = mat1@mat2
+{
+    res[0] = mat2[0]*mat1[0]+mat2[2]*mat1[1];
+    res[1] = mat2[1]*mat1[0]+mat2[3]*mat1[1];
+    res[2] = mat2[0]*mat1[2]+mat2[2]*mat1[3];
+    res[3] = mat2[1]*mat1[2]+mat2[3]*mat1[3];
+}
+
+__device__  __forceinline__
+void Tmat2(float* mat,float* Tmat)
+{
+    Tmat[0] = mat[0];
+    Tmat[1] = mat[2];
+    Tmat[2] = mat[1];
+    Tmat[3] = mat[3];
+}
+
+extern "C" __global__
 //假设这里的gaussian参数为已经排序好的scene_gaussian,ray-space
-void cuda_process(float* cens,float *covs,float* colors,float* weights,float* point,float* range, int gaussian_nums,int image_height,int image_width,float* K)
+void cuda_preprocess(float* cens,float *covs,int* checkin,int gaussian_nums,int image_height,int image_width,float* K)
 {
 
     int u = blockIdx.x*blockDim.x+threadIdx.x;
     int v = blockIdx.y*blockDim.y+threadIdx.y;
-
     int blockid = blockIdx.y*(image_width/blockDim.x)+blockIdx.x;
-    int vmax =1000;              //假设一个tile中最多可存在的有效gaussian数量
-    int valid = 0;               //有效高斯计数
+
+    //int valid = 0;               //有效高斯计数
     float cen_u,cen_v;           //高斯中心点像素坐标系
     float cen_x,cen_y;           //高斯中心点透视坐标系
 
     for(int i=0;i<gaussian_nums;i++)
     {
-        if(valid<1000)
+        cen_x = cens[i*2];
+        cen_y = cens[i*2+1];
+
+        cen_u = cen_x*K[0]+cen_y*K[1]+K[2];
+        cen_v = cen_x*K[3]+cen_y*K[4]+K[5];
+
+        //求像素坐标系下的高斯协方差矩阵,只有二维,理论上为K[:2,:2]@covs@K[:2,:2].T
+        float covpl[4];    //K[:2,:2]@covs
+        float covpr[4];     //K[:2,:2]@covs@K[:2,:2].T
+
+        float k[4] = {K[0],K[1],K[3],K[4]}; //K[:2,:2]
+        float cov[4] = {covs[i*4],covs[i*4+1],covs[i*4+2],covs[i*4+3]};
+        float kt[4];
+        Tmat2(k,kt);
+        
+        mat2dmul(k,cov,covpl);
+        mat2dmul(covpl,kt,covpr);
+
+
+
+        //对cov_p特征值分解,确定99%置信区间:3sigma,sigma=sqrt(max(lamda));
+        float a = covpr[0];
+        float b = covpr[1];
+        float c = covpr[2];
+        float d = covpr[3];
+        float lamda1 = 0.5*((a+d)+sqrt((a+d)*(a+d)-4*(a*d-b*c)));
+        float lamda2 = 0.5*((a+d)-sqrt((a+d)*(a+d)-4*(a*d-b*c)));
+
+        float radii = 3*sqrt(max(lamda1,lamda2));
+        float dis = sqrt((u-cen_u)*(u-cen_u)+(v-cen_v)*(v-cen_v));
+        //判读pixel点是否在这个置信圆中,比较raddi和dis,若dis<raddi则在。由于一个block中只要有一个pixel有贡献值,就认为gaussian有效,所以这里采用atomicOr.
+        if(dis<radii)
         {
-            cen_x = cens[i*2];
-            cen_y = cens[i*2+1];
-
-            cen_u = cen_x*K[0]+cen_y*K[1]+K[2];
-            cen_y = cen_x*K[3]+cen_y*K[4]+K[5];
-
-            //求像素坐标系下的高斯协方差矩阵,只有二维,理论上为K[:2,:2]@covs@K[:2,:2].T
-            float* cov_p = K[:2,:2]@covs@K[:2,:2].T;
-
-            //对cov_p特征值分解,确定99%置信区间:3sigma,sigma=sqrt(max(lamda));
-            float a = cov_p[0];
-            float b = cov_p[1];
-            float c = cov_p[2];
-            float d = cov_p[3];
-            float lamda1 = 0.5*((a+d)+sqrt((a+d)**2-4*(a*d-b*c)));
-            float lamda2 = 0.5*((a+d)-sqrt((a+d)**2-4*(a*d-b*c)));
-
-            radii = 3*sqrt(max(lamda1,lamda2));
-            dis = sqrt((u-cen_u)**2+(v-cen_v)**2);
-            //判读pixel点是否在这个置信圆中,比较raddi和dis,若dis<raddi则在。
-            if(dis<radii)
-            {
-                point[blockid*vmax+valid] = i;
-                valid++;
-            }
-        }   
+            atomicOr(&checkin[blockid*gaussian_nums+i],1);
+        }
     }
-    range[blockid*2] = blockid*vmax;        //tile有效高斯索引列表在point数组的起始地址
-    range[blockid*2+1] = blockid*vmax+valid;  //tile有效高斯索引列表在point数组的终止地址
+    //range[blockid*2] = blockid*vmax;        //tile有效高斯索引列表在point数组的起始地址
+    // range[blockid*2+1] = blockid*vmax+valid;  //tile有效高斯索引列表在point数组的终止地址
 
 
 }
@@ -208,7 +294,11 @@ void cuda_process(float* cens,float *covs,float* colors,float* weights,float* po
 
 render_gpt = cp.RawKernel(_KERNEL_CODE,"render_alpha_blending")
 render_kernel = cp.RawKernel(_kernel_code,"rasterization")
+render_kernel_v2 = cp.RawKernel(_rasterization_code,"rasterization_v2")
+
 color_grad_kernel = cp.RawKernel(_grad_code, "compute_color_gradv2")
+
+cuda_preprocess = cp.RawKernel(_preprocess_code,"cuda_preprocess")
 
 
 
@@ -298,26 +388,33 @@ def _as_numpy(value, dtype=np.float32):
 if __name__ == "__main__":
 #######initialize params
     cenp = torch.tensor([1, 2, 3], dtype=torch.float32)
-    cenp1 = torch.tensor([2, 2, 4], dtype=torch.float32)
+    cenp1 = torch.tensor([4, 1, 5], dtype=torch.float32)
+    cenp2 = torch.tensor([3, 3, 0], dtype=torch.float32)
 
     cov_s = torch.tensor([[1, 0, 0], [0, 3, 0], [0, 0, 4]], dtype=torch.float32)
     cov_s1 = torch.tensor([[2, 0, 0], [0, 2, 0], [0, 0, 4]], dtype=torch.float32)
+    cov_s2 = torch.tensor([[0.5, 0, 0], [0, 1, 0], [0, 0, 6]], dtype=torch.float32)
 
     color1 = torch.tensor([0.1, 0.4, 0.7], dtype=torch.float32)
     color2 = torch.tensor([0.7, 0.3, 0.2], dtype=torch.float32)
-    density = 2
+    color3 = torch.tensor([0.4, 0.7, 0.2], dtype=torch.float32) 
+
+    opacity = 0.9
 
     w = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
     c = torch.tensor([-1, -2, 2], dtype=torch.float32)
     intrinsic = torch.tensor([[50, 0, 256], [0, 50, 256], [0, 0, 1]], dtype=torch.float32)
 
-    gs = GaussianModel(cenp, cov_s, color1, density)
-    gs1 = GaussianModel(cenp1, cov_s1, color2, density)
+    gs = GaussianModel(cenp, cov_s, color1, opacity)
+    gs1 = GaussianModel(cenp1, cov_s1, color2, opacity)
+    gs2 = GaussianModel(cenp2, cov_s2, color3, opacity)
     gs._o2c(w, c)
     gs._c2r()
     gs1._o2c(w, c)
     gs1._c2r()
-    gaussian_list = [gs, gs1]
+    gs2._o2c(w, c)
+    gs2._c2r()
+    gaussian_list = [gs, gs1,gs2]
 
 
 
@@ -331,6 +428,7 @@ if __name__ == "__main__":
 #######prepare render params
     cens = []
     inv_covs = []
+    covs = []
     weights = []
     colors = []
     for gaussian in gaussian_list:
@@ -342,10 +440,10 @@ if __name__ == "__main__":
 
         inv_cov = np.asarray(torch.inverse(cov2d)).reshape(-1)
         inv_covs.append(inv_cov)
-
+        covs.append(np.asarray(cov2d).reshape(-1))
         colors.append(np.asarray(gaussian._col).reshape(-1))
 
-
+    ######pytorch tensor autograd params
     cens_cuda = torch.tensor(np.array(cens),device="cuda",dtype=torch.float32).reshape(-1,2)
     inv_covs_cuda = torch.tensor(np.array(inv_covs),device="cuda",dtype=torch.float32).reshape(-1,4)
     weights_cuda = torch.tensor(np.array(weights),device="cuda",dtype=torch.float32)
@@ -357,10 +455,13 @@ if __name__ == "__main__":
     # print("inv_covs:",inv_covs_cuda)
     # print("colors:",colors_cuda)
 
+    ######custom cuda params
     cens = cp.asarray(cens, dtype=cp.float32)
     inv_covs = cp.asarray(inv_covs, dtype=cp.float32)
+    covs = cp.asarray(covs,dtype=cp.float32)
     weights = cp.asarray(weights, dtype=cp.float32)
     colors = cp.asarray(colors, dtype=cp.float32)
+    K = cp.asarray(np.asarray(intrinsic).reshape(-1),dtype=cp.float32)
     inv_k = cp.asarray(np.linalg.inv(_as_numpy(intrinsic)), dtype=cp.float32).reshape(-1)
 
 
@@ -374,6 +475,43 @@ if __name__ == "__main__":
     # print("cens:",cens)
     # print("inv_covs:",inv_covs)
     # print("colors:",colors)
+
+
+    
+#####do frustum cull  for render
+    vmax =1000              #限制一个tile中最多可存在的有效gaussian数量
+    point = []
+    range = []
+    checkin = cp.zeros((grid[0]*grid[1]*len(gaussian_list),),dtype=cp.int32)
+
+    cuda_preprocess(grid,block,(cens,covs,checkin,len(gaussian_list),height,width,K))
+    check = checkin.get()
+    print("checkin:",check.sum())
+
+    rangex=0
+    rangey=0
+    for idx,val in enumerate(check):
+
+        if val==1:
+            point.append(idx%len(gaussian_list))
+            rangey=rangey+1
+            
+        if (idx+1)%len(gaussian_list)==0:
+            range.append([rangex,rangey])
+            # print("tilerange:",[rangex,rangey])
+            rangex = rangey
+    point = np.asarray(point).reshape(-1)
+    range = np.asarray(range).reshape(-1)
+
+    point = cp.asarray(point,dtype=cp.int32)
+    range =cp.asarray(range,dtype=cp.int32)
+    # print("pointshape:",point.shape,"point:",point)
+    # print("rangeshape:",range.shape,"range:",range)
+    # pr_point = point.get()
+    # pr_range = range.get()
+
+    # print("point:",pr_point)
+    # print("range:",pr_range)
 
 
 
@@ -396,20 +534,41 @@ if __name__ == "__main__":
     gt_image = image.get()
     gt_image = torch.tensor(gt_image,device="cuda",dtype=torch.float32)
 
-    print("weights:", weights)
-    print("weights max:", float(cp.max(weights)))
+
+######render for  gt_image wirh cull process
+
+    cul_gt = cp.empty((512,512,3),dtype=cp.float32)
+    render_kernel_v2(
+        grid,
+        block,
+        (
+            np.int32(len(gaussian_list)),
+            np.int32(height),
+            np.int32(width),
+            inv_k,
+            weights,
+            cens,
+            inv_covs,
+            colors,
+            cul_gt,
+            point,
+            range
+        ),
+    )
+    gt_image_cull =cul_gt.get()
+    gt_image_cull = torch.tensor(gt_image_cull,device="cuda",dtype=torch.float32)
 
 
-###########Integrate CUDA Rasterizer into PyTorch
-    pr_colors = torch.randn([len(gaussian_list),3],device="cuda",requires_grad=True,dtype=torch.float32)
-    optimizer = torch.optim.Adam([pr_colors], lr=0.01)
-    for i in range(3000):
-        optimizer.zero_grad()
-        pred = render_cuda(pr_colors, cens_cuda, inv_covs_cuda, weights_cuda, inv_k_cuda, height, width)
-        loss = torch.mean((pred - gt_image) ** 2)
-        loss.backward()
-        optimizer.step()
-        print("step:",i,"loss:",loss,"colors",pr_colors)
+# ###########Integrate CUDA Rasterizer into PyTorch
+#     pr_colors = torch.randn([len(gaussian_list),3],device="cuda",requires_grad=True,dtype=torch.float32)
+#     optimizer = torch.optim.Adam([pr_colors], lr=0.01)
+#     for i in range(3000):
+#         optimizer.zero_grad()
+#         pred = render_cuda(pr_colors, cens_cuda, inv_covs_cuda, weights_cuda, inv_k_cuda, height, width)
+#         loss = torch.mean((pred - gt_image) ** 2)
+#         loss.backward()
+#         optimizer.step()
+#         print("step:",i,"loss:",loss,"colors",pr_colors)
 
 
 
@@ -492,14 +651,9 @@ if __name__ == "__main__":
 
 
 
-    # # random_image = cp.empty([512,512,512],dtype=cp.float32)
-    # # render_kernel(grid,block,(len(gaussian_list),height,width,inv_k,weights,cens,inv_covs,colors,random_image))
-    # # random_image =random_image.get()
-    # # random_image = _normalize_for_display(random_image)
- 
-    # # plt.subplot(1,3,1)
-    # # plt.title("random_init")
-    # # plt.imshow(random_image)
+
+
+#######torch tensor autograd backward
     # pr_cens = torch.randn([len(gaussian_list),2],device="cuda",requires_grad=True)
     # # pr_cens = cens_cuda.clone().requires_grad_(True)
     # pr_colors = torch.randn([len(gaussian_list),3],device="cuda",requires_grad=True)
@@ -507,9 +661,6 @@ if __name__ == "__main__":
     #     {"params": [pr_cens],  "lr": 0.001},
     #     {"params": [pr_colors], "lr": 0.01},
     # ])
-
-
-
 
     # for step in range(3000):
     #     optimizer.zero_grad()
@@ -528,15 +679,22 @@ if __name__ == "__main__":
 
 
     # pr_image = pr_image.detach().cpu().numpy()
-    # gt_image = gt_image.detach().cpu().numpy()
+    gt_image = gt_image.detach().cpu().numpy()
+    gt_image_cull = gt_image_cull.detach().cpu().numpy()
     # pr_image = _normalize_for_display(pr_image)
-    # gt_image = _normalize_for_display(gt_image)
+    gt_image = _normalize_for_display(gt_image)
+    gt_image_cull = _normalize_for_display(gt_image_cull)
 
-    # plt.subplot(1,2,1)
-    # plt.title("gt")
-    # plt.imshow(gt_image )
+    plt.subplot(1,2,1)
+    plt.title("gt")
+    plt.imshow(gt_image )
+
+    plt.subplot(1,2,2)
+    plt.title("gt_cull")
+    plt.imshow(gt_image_cull )
 
     # plt.subplot(1,2,2)
     # plt.title("preimage")
     # plt.imshow(pr_image)
-    # plt.show()
+
+    plt.show()
