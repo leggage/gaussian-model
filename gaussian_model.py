@@ -46,16 +46,16 @@ class GaussianModel:
 
     def gs_dist_cam(self,x):
         diff = x-self._cen_cam
-        return 1/(sqrt((2*pi)**3*torch.det(self._cov_cam))*torch.det(torch.inverse(self._w_cam)))*exp(-0.5*(diff).T@torch.inverse(self._cov_cam)@diff)
+        return exp(-0.5*(diff).T@torch.inverse(self._cov_cam)@diff)
 
     def gs_dist_ray(self,x):
         diff = x-self._cen_ray
-        return 1/(sqrt((2*pi)**3*torch.det(self._cov_ray))*torch.det(torch.inverse(self._jco))*torch.det(torch.inverse(self._w_cam)))*exp(-0.5*(diff).T@torch.inverse(self._cov_ray)@diff)
+        return exp(-0.5*(diff).T@torch.inverse(self._cov_ray)@diff)
 
     def footprint(self,x):
         diff = x-self._cen_ray[:2]
         cov_2d = self._cov_ray[:2,:2]
-        return 1/(sqrt((2*pi)**3*torch.det(cov_2d))*torch.det(torch.inverse(self._jco))*torch.det(torch.inverse(self._w_cam)))*exp(-0.5*(diff).T@torch.inverse(cov_2d)@diff)
+        return exp(-0.5*(diff).T@torch.inverse(cov_2d)@diff)
 
 
 def alpha_blending(gaussian_list,x):   ###gaussian-kernel排序按照射线积分路径顺序，先被积分的在列表前面
@@ -64,7 +64,7 @@ def alpha_blending(gaussian_list,x):   ###gaussian-kernel排序按照射线积�
         j = 0
         T = 1
         while j<idx:
-            T = T*(1-gaussian_list[j].footprint(x))
+            T = T*(1-gaussian_list[j].footprint(x)*gaussian_list[j].opacity)
             j = j+1
         pixel = pixel + item._col*T*item.footprint(x)
     return pixel

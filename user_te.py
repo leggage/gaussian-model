@@ -10,6 +10,8 @@ from gaussian_model import GaussianModel
 import torch
 import  matplotlib.pyplot as plt
 from math import exp, pi, sqrt
+from render_extension import render_forward as render_forward_extension
+from diff_rasterization import rasterizer
 
 _KERNEL_CODE = r'''
 extern "C" __global__
@@ -147,22 +149,7 @@ void rasterization_v2(int gaussian_num,int image_height,int image_width,float *i
 
         T = T*(1-alpha);          
     }
-//
-    for(int i=0;i<gaussian_num;++i){
-        float dx = ray_x - cen[2*i];
-        float dy = ray_y - cen[2*i+1];
 
-        float mahlo = dx*dx*cov[i*4]+dx*dy*(cov[i*4+1]+cov[i*4+2])+dy*dy*cov[i*4+3];
-        float alpha = weight[i]*expf(-0.5*mahlo);
-        alpha = fminf(fmaxf(alpha, 0.0f), 0.99f);
-
-        out_r += colors[i * 3 + 0] * T * alpha;
-        out_g += colors[i * 3 + 1] * T * alpha;
-        out_b += colors[i * 3 + 2] * T* alpha;
-
-        T = T*(1-alpha);      
-    }
-//
     const int offset = (image_y * image_width + image_x) * 3;
     image[offset + 0] = out_r;
     image[offset + 1] = out_g;
@@ -265,9 +252,6 @@ void cuda_preprocess(float* cens,float *covs,int* checkin,int gaussian_nums,int 
         mat2dmul(k,cov,covpl);
         mat2dmul(covpl,kt,covpr);
 
-
-
-        //对cov_p特征值分解,确定99%置信区间:3sigma,sigma=sqrt(max(lamda));
         float a = covpr[0];
         float b = covpr[1];
         float c = covpr[2];
@@ -330,22 +314,7 @@ class rasterizer(torch.autograd.Function):
         ctx.block = (16,16)
         ctx.grid = ((width+ctx.block[0]-1)//ctx.block[0],(height+ctx.block[1]-1)//ctx.block[1])
 
-        colors_cp = cp.from_dlpack(to_dlpack(colors.contiguous().reshape(-1)))
-        cens_cp = cp.from_dlpack(to_dlpack(cens.contiguous().reshape(-1)))
-        inv_covs_cp = cp.from_dlpack(to_dlpack(inv_covs.contiguous().reshape(-1)))
-        weights_cp = cp.from_dlpack(to_dlpack(weights.contiguous()))
-        inv_k_cp = cp.from_dlpack(to_dlpack(inv_k.contiguous().reshape(-1)))       
-
-        image_cp = cp.empty([height,width,3],dtype=cp.float32)
-
-        render_kernel(
-            ctx.grid, ctx.block,
-            (ctx.gaussian_nums, height, width,
-             inv_k_cp, weights_cp, cens_cp,
-             inv_covs_cp, colors_cp, image_cp)
-        )
-
-        return from_dlpack(image_cp.toDlpack())
+        return render_forward_extension(colors, cens, inv_covs, weights, inv_k, height, width)
 
     @staticmethod
     def backward(ctx,grad_output):
@@ -388,8 +357,8 @@ def _as_numpy(value, dtype=np.float32):
 if __name__ == "__main__":
 #######initialize params
     cenp = torch.tensor([1, 2, 3], dtype=torch.float32)
-    cenp1 = torch.tensor([4, 1, 5], dtype=torch.float32)
-    cenp2 = torch.tensor([3, 3, 0], dtype=torch.float32)
+    cenp1 = torch.tensor([4, 7, 5], dtype=torch.float32)
+    cenp2 = torch.tensor([10, 17, 3], dtype=torch.float32)
 
     cov_s = torch.tensor([[1, 0, 0], [0, 3, 0], [0, 0, 4]], dtype=torch.float32)
     cov_s1 = torch.tensor([[2, 0, 0], [0, 2, 0], [0, 0, 4]], dtype=torch.float32)
@@ -402,7 +371,7 @@ if __name__ == "__main__":
     opacity = 0.9
 
     w = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
-    c = torch.tensor([-1, -2, 2], dtype=torch.float32)
+    c = torch.tensor([-1, -2, 2], dtype=torch.float32)              ####相机光心在(1,2,-2)
     intrinsic = torch.tensor([[50, 0, 256], [0, 50, 256], [0, 0, 1]], dtype=torch.float32)
 
     gs = GaussianModel(cenp, cov_s, color1, opacity)
@@ -435,7 +404,9 @@ if __name__ == "__main__":
         cens.append(np.asarray(gaussian._cen_ray[:2]).reshape(-1))
 
         cov2d = gaussian._cov_ray[:2,:2]
+        #####和3dgs一样暂时忽略积分bias
         weight = 1/(sqrt((2*pi)**3*torch.det(cov2d))*torch.det(torch.inverse(gaussian._jco))*torch.det(torch.inverse(gaussian._w_cam)))
+        # weight =1
         weights.append(weight)
 
         inv_cov = np.asarray(torch.inverse(cov2d)).reshape(-1)
@@ -481,7 +452,7 @@ if __name__ == "__main__":
 #####do frustum cull  for render
     vmax =1000              #限制一个tile中最多可存在的有效gaussian数量
     point = []
-    range = []
+    tile_range = []
     checkin = cp.zeros((grid[0]*grid[1]*len(gaussian_list),),dtype=cp.int32)
 
     cuda_preprocess(grid,block,(cens,covs,checkin,len(gaussian_list),height,width,K))
@@ -497,14 +468,14 @@ if __name__ == "__main__":
             rangey=rangey+1
             
         if (idx+1)%len(gaussian_list)==0:
-            range.append([rangex,rangey])
+            tile_range.append([rangex,rangey])
             # print("tilerange:",[rangex,rangey])
             rangex = rangey
     point = np.asarray(point).reshape(-1)
-    range = np.asarray(range).reshape(-1)
+    tile_range = np.asarray(tile_range).reshape(-1)
 
     point = cp.asarray(point,dtype=cp.int32)
-    range =cp.asarray(range,dtype=cp.int32)
+    tile_range =cp.asarray(tile_range,dtype=cp.int32)
     # print("pointshape:",point.shape,"point:",point)
     # print("rangeshape:",range.shape,"range:",range)
     # pr_point = point.get()
@@ -552,7 +523,7 @@ if __name__ == "__main__":
             colors,
             cul_gt,
             point,
-            range
+            tile_range
         ),
     )
     gt_image_cull =cul_gt.get()
@@ -570,7 +541,17 @@ if __name__ == "__main__":
 #         optimizer.step()
 #         print("step:",i,"loss:",loss,"colors",pr_colors)
 
-
+# ###########CUDA Rasterizer in torch extension
+    pr_colors = torch.randn(len(gaussian_list), 3, device="cuda", dtype=torch.float32,requires_grad=True)
+    optimizer = torch.optim.Adam([pr_colors], lr=0.01)
+    for i in range(3000):
+        optimizer.zero_grad()
+        pred = rasterizer.apply(pr_colors, cens_cuda, inv_covs_cuda, weights_cuda, inv_k_cuda, height, width)
+        loss = torch.mean((pred - gt_image) ** 2)
+        loss.backward()
+        optimizer.step()
+        if i%100==0:
+            print("step:",i,"loss:",loss,"colors",pr_colors)
 
 #######compute grad handly test
     # N = len(gaussian_list)
