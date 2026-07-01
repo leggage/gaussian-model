@@ -426,7 +426,7 @@ if __name__ == "__main__":
     # print("inv_covs:",inv_covs_cuda)
     # print("colors:",colors_cuda)
 
-    ######custom cuda params
+    ######custom cuda kernel params
     cens = cp.asarray(cens, dtype=cp.float32)
     inv_covs = cp.asarray(inv_covs, dtype=cp.float32)
     covs = cp.asarray(covs,dtype=cp.float32)
@@ -506,7 +506,7 @@ if __name__ == "__main__":
     gt_image = torch.tensor(gt_image,device="cuda",dtype=torch.float32)
 
 
-######render for  gt_image wirh cull process
+######render for gt_image with cull process
 
     cul_gt = cp.empty((512,512,3),dtype=cp.float32)
     render_kernel_v2(
@@ -541,7 +541,9 @@ if __name__ == "__main__":
 #         optimizer.step()
 #         print("step:",i,"loss:",loss,"colors",pr_colors)
 
-# ###########CUDA Rasterizer in torch extension
+
+
+# ###########CUDA Rasterizer in torch extension module
     pr_colors = torch.randn(len(gaussian_list), 3, device="cuda", dtype=torch.float32,requires_grad=True)
     optimizer = torch.optim.Adam([pr_colors], lr=0.01)
     for i in range(3000):
@@ -552,6 +554,7 @@ if __name__ == "__main__":
         optimizer.step()
         if i%100==0:
             print("step:",i,"loss:",loss,"colors",pr_colors)
+
 
 #######compute grad handly test
     # N = len(gaussian_list)
