@@ -146,7 +146,7 @@ __gloabl__  void preprocess_render(
   conics2d[idx*3+1]=-det_inv*cov2d_p.y;
   conics2d[idx*3+2]=det_inv*cov2d_p.x;
 
-  //prepare weights
+  //prepare weights(integration bias)
   float l = sqrt(p_cam.z*p_cam.z+p_cam.y*p_cam.y+p_cam.x*p_cam.x);
   glm::mat3 Jr3=glm::mat3(1/p_cam.z,0,p_cam.x/l,
                            0,1/p_cam.z,p_cam.y/l,

@@ -46,6 +46,82 @@ __global__ void grad_kernel(
     }
 }
 
+__global__ void backward(
+  const int gaussian_num,
+  const int image_height,
+  const int image_width,
+  const float* __restrict__ dl_dpixel; //height*width*chan
+  const float* __restrict__ conics2d,
+  const float* __restrict__ means2d,
+  const float* __restrict__ weights
+  const float* __restrict__ colors,
+  const float* __restrict__ opacity,
+  const float* __restrict__ Tfinal,
+  float* __restrict__ dl_dcolor;
+  float* __restrict__ dl_dconics2d,
+  float* __restrict__ dl_dcovr3d;
+  float* __restrict__ dl_dcovr2d;
+
+  float* __restrict__ image)
+{
+    const int image_x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int image_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (image_x >= image_width || image_y >= image_height) {
+    return;
+    }
+//根据公式dchanch_dalphai = Ti(ci[ch]-cbehind[ch])
+    float T = Tfinal;
+    float cbehind[3] = 0;
+    float dchan_dalpha[3*gaussian_num]=0;
+
+    //用于累加梯度的中间变量
+    float dalpha_dconics[3]=0; 
+    float dalpha_dcov3r[6]=0;
+    float dalpha_dcov2r[3]=0;
+    for(int i=gaussian_num-1;i>=0;i--)
+    {
+        //求当前gaussian的透射率 Ti      
+        float dx = image_x-means2d[i*2];
+        float dy = image_y-means2d[i*2+1];
+        float maloh = -0.5*(dx*dx*conics2d[i*3]+
+                            2*dx*dy*conics2d[i*3+1]+
+                            dy*dy*conics2d[i*3+2]);
+        float G =expf(maloh);
+        float alpha = opacity[i]*weights[i]*G;
+        T = T/(1-alpha);
+        //dl_dpixel[ch]代表dl_dchanch
+        //求cbehind,由于color是rgb三通道，所以最后叠加梯度时要三通道；计算dchan_dalpha
+        for(int ch=0;ch<3;ch++)
+        {
+            float color = colors[i*3+ch];
+            //dchan_dalpha存储方式是通道优先，先通道一中所有gaussian再通道2...
+            dchan_dalpha[ch*gaussian_num+i] = T(color-cbehind[ch]);
+            cbehind[ch]=cbehind[ch]*(1-alpha)+color*alpha;
+        }
+
+        float dalpha_dopacity = weights[i]*G;
+
+        //计算dalpha_dconic,只存上三角区域
+        dalpha_dconic[0] = -0.5*alpha*dx*dx;
+        dalpha_dconic[1] = -0.5*alpha*dx*dy;
+        dalpha_dconic[2] = -0.5*alpha*dy*dy;
+
+        //计算dalpha_dcov3r,dalpha_dcov2r,需要用到矩阵求逆
+        
+
+
+        
+
+
+    }
+
+
+}
+
+
+
+
+
 torch::Tensor backward_cuda(
     torch::Tensor dl_dpixel,
     torch::Tensor inv_k,

@@ -8,3 +8,4 @@ keyboard/
 *.zip
 *.deb
 third_party/
+manual_grad_3dgs.py
