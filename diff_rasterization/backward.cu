@@ -58,9 +58,11 @@ __global__ void backward(
   const float* __restrict__ opacity,
   const float* __restrict__ Tfinal,
   float* __restrict__ dl_dcolor;
+  float* __restrict__ dl_dopacity;
   float* __restrict__ dl_dconics2d,
-  float* __restrict__ dl_dcovr3d;
-  float* __restrict__ dl_dcovr2d;
+  float* __restrict__ dl_dcovr3d,
+  float* __restrict__ dl_dcovr2d,
+  float* __restrict__ dl_dcenp2d,
 
   float* __restrict__ image)
 {
@@ -69,6 +71,7 @@ __global__ void backward(
     if (image_x >= image_width || image_y >= image_height) {
     return;
     }
+    const int Idx = image_y*image_width+image_x;
 //根据公式dchanch_dalphai = Ti(ci[ch]-cbehind[ch])
     float T = Tfinal;
     float cbehind[3] = 0;
@@ -107,9 +110,32 @@ __global__ void backward(
         dalpha_dconic[2] = -0.5*alpha*dy*dy;
 
         //计算dalpha_dcov3r,dalpha_dcov2r,需要用到矩阵求逆
+        glm::mat3 dcov3r = 0.5*alpha*glm::inverse(cov3r);
+        glm::mat2 dcov2r = -0.5*alpha*glm::inverse(cov2r);
+        dalpha_dcov3r = {dcov3r[0][0],dcov3r[0][1],dcov3r[0][2],dcov3r[1][1],dcov3r[1][2],dcov3r[2][2]};
+        dalpha_dcov2r = {dcov2r[0][0],dcov2r[0][1],dcov2r[1][1]};
+
+
+
+        float dchan_dcolor = T*alpha;
+        //dl_...
+        //这里对dl_dpixel的索引方式是建立在rgb存储通道优先的假设上的
+        for(int c=0;c<3;c++)
+        {
+           atomicAdd(&dl_dcolor[i*3+c],dl_dpixel[Idx*3+c]*dchan_dcolor); 
+           atomicAdd(&dl_dopacity[i],dl_dpixel[Idx*3+c]*dchan_dalpha[c]*dalpha_dopacity);
+           for(int j=0;j<3;j++)
+           {
+            atomicAdd(&dl_dconics2d[i*3+j],dl_dpixel[Idx*3+c]*dchan_dalpha[c]*dalpha_dconic[j]);
+            atomicAdd(&dl_dcovr2d[i*3+j],dl_dpixel[Idx*3+c]*dchan_dalpha[c]*dalpha_dcov2r[j]);
+           }
+           for(int j=0;j<6;j++)
+           {
+            atomicAdd(&dl_dcovr3d[i*6+j],dl_dpixel[Idx*3+c]*dchan_dalpha[c]*dalpha_dcov3r[j]);
+           }           
+
+        }
         
-
-
         
 
 
