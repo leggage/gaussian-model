@@ -2,7 +2,7 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_runtime.h>
 #include <torch/extension.h>
-
+#
 
 __global__ void grad_kernel(
     float* dl_dpixel,
@@ -46,6 +46,133 @@ __global__ void grad_kernel(
     }
 }
 
+__global__ void preprocess(
+  const int gaussian_num,
+  const int fx,
+  const int fy,
+  const float* __restrict__ viewmatrix,
+  const float* __restrict__ projmatrix,                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+  const float* __restrict__ cen3w,
+  const float* __restrict__ cov3w,
+  const float* __restrict__ conics2d,
+
+  const float* __restrict__ dl_dconics2d,
+  const float* __restrict__ dl_dcovr3d,
+  const float* __restrict__ dl_dcovr2d,
+  const float* __restrict__ dl_dcenp2d,
+  float* __restrict__ dL_dcov3w,
+  float* __restrict__ dL_dcen3w)
+  {
+    auto idx = blockIdx.x * blockDim.x+ threadIdx.x;
+    if (idx>=gaussian_num){return;}
+// compute dl_dcov3w  from  dl_dconics2d dl_dcovr3d dl_dcovr2d part
+    glm::mat2 conic = glm::mat2(conics2d[idx*3],conics2d[idx*3+1],conics2d[idx*3+1],conics2d[idx*3+2]);
+    glm::mat2 dl_dconic = glm::mat2(dl_dconics2[idx*3],dl_dconics2d[idx*3+1],dl_dconics2d[idx*3+1],dl_dconics2d[idx*3+2]);
+    glm::mat2 dl_dcov2p = -conic*dl_dconic*conic;
+
+    float3 p3w = {cen3w[idx*3],cen3w[idx*3+1],cen3w[idx*3+2]};
+    float3 p3c = transformPoint4*3(p3w,viewmatrix);
+    //dl_dcov3w_conic PART
+    glm::mat3 J2p = glm::mat3(fx/p3c.z,0,0,
+                              0,fy/p3c.z,0,
+                              -p3c.x*fx/(p3c.z*p3c.z),-p3c.y*fy/(p3c.z*p3c.z),0);
+    glm::mat3 W = glm::mat3(viewmatrix[0],viewmatrix[3],viewmatrix[6],
+                            viewmatrix[1],viewmatrix[4],viewmatrix[7],
+                            viewmatrix[2],viewmatrix[5],viewmatrix[8])
+    glm::mat3 M = J2p*W;
+
+    glm::mat3 dldcov2p = glm::mat3(dl_dcov2p[0][0],dl_dcov2p[1][0],0,
+                                   dl_dcov2p[0][1],dl_dcov2p[1][1],0,
+                                   0,0,0);
+    glm::mat3 dl_dcov3w_conic = glm::transpose(M)*dldcov2p*M;
+
+    //dl_dcov3w_cov3r PART
+    float3 len = sqrt(p3c.x*p3c.x+p3c.y*p3c.y+p3c.z*p3c.z);
+    glm::mat3 J3r = glm::mat3(1/p3c.z,0,p3c.x/len,
+                              0,1/p3c.z,p3c.y/len,
+                              -p3c.x/(p3c.z*p3c.z),-p3c.y/(p3c.z*p3c.z),p3c.z/len);
+    M = J3r*W;
+    glm::mat3 dldcov3r = glm::mat3(dl_dcovr3d[idx*6],dl_dcovr3d[idx*6+1],dl_dcovr3d[idx*6+2],
+                                   dl_dcovr3d[idx*6+1],dl_dcovr3d[idx*6+3],dl_dcovr3d[idx*6+4],
+                                   dl_dcovr3d[idx*6+2],dl_dcovr3d[idx*6+4],dl_dcovr3d[idx*6+5]);   
+    glm::mat3 dl_dcov3w_cov3r = glm::transpose(M)*dldcov3r*M;
+
+    //dl_dcov3w_cov2 PART
+    glm::mat3 J2r = glm::mat3(1/p3c.z,0,0,
+                              0,1/p3c.z,0,
+                              -p3c.x/(p3c.z*p3c.z),-p3c.y/(p3c.z*p3c.z),0);
+    M = J2r*W;
+    glm::mat3 dldcov2r = glm::mat3(dl_dcovr3d[idx*6],dl_dcovr3d[idx*6+1],0,
+                                   dl_dcovr3d[idx*6+1],dl_dcovr3d[idx*6+3],0,
+                                   0,0,0);
+    glm::mat3 dl_dcov3w_cov2r = glm::transpose(M)*dldcov2r*M;
+    //TOTAL dl_dcov3w
+    glm::mat3 dl_dcov3w  = dl_dcov3w_conic+dl_dcov3w_cov3r+dl_dcov3w_cov2r;
+    
+
+
+//compute dl_dcen3w
+  //compute dl_dcen3c = dLdJ3R*dJ3r_dcen3c + dLdJ2R*dJ2r_dcen3c + dLdJ2P*dJ2p_dcen3  +dLdcen2p*dcen2p_dcen3c,
+    //compute dl_dJ3r,dl_dJ2r,dl_dJ2p 
+    glm::mat3 cov3W = glm::mat3(cov3w[idx*6],cov3w[idx*6+1],cov3w[idx*6+2],
+                                cov3w[idx*6+1],cov3w[idx*6+3],cov3w[idx*6+4],
+                                cov3w[idx*6+2],cov3w[idx*6+4],cov3w[idx*6+5]);
+    M = W*cov3W*glm::transpose(W);
+    glm::mat3 dl_dJ3r = 2*dldcov3r*J3r*M;
+    glm::vec9 dLdJ3R = glm::vec9(dl_dJ3r[0][0],dl_dJ3r[1][0],dl_dJ3r[2][0],
+                                 dl_dJ3r[0][1],dl_dJ3r[1][1],dl_dJ3r[2][1],
+                                 dl_dJ3r[0][2],dl_dJ3r[1][2],dl_dJ3r[2][2]);
+    glm::mat3 dl_dJ2r = 2*dldcov2r*J2r*M;
+    glm::vec9 dLdJ2R = glm::vec9(dl_dJ2r[0][0],dl_dJ2r[1][0],dl_dJ2r[2][0],
+                                 dl_dJ2r[0][1],dl_dJ2r[1][1],dl_dJ2r[2][1],
+                                 dl_dJ2r[0][2],dl_dJ2r[1][2],dl_dJ2r[2][2]);    
+    glm::mat3 dl_dJ2p = 2*dldcov2p*J2p*M;
+    glm::vec9 dLdJ2P = glm::vec9(dl_dJ2p[0][0],dl_dJ2p[1][0],dl_dJ2p[2][0],
+                                 dl_dJ2p[0][1],dl_dJ2p[1][1],dl_dJ2p[2][1],
+                                 dl_dJ2p[0][2],dl_dJ2p[1][2],dl_dJ2p[2][2]); 
+
+    //compute dJ3r_dcen3c,dJ2r_dcen3c,dJ2p_dcen3c
+    float xc = p3c.x;
+    float yc = p3c.y;
+    float zc = p3c.z;
+    glm::mat3x9 dJ3r_dcen3c = glm::mat3x9(0,0,-1/(zc*zc),0,0,0,(len-xc*xc/len)/(len*len),(-xc*yc/len)/(len*len),(-xc*zc/len)/(len*len),
+                                          0,0,0,0,0,-1/(zc*zc),(-xc*yc/len)/(len*len),(len-yc*yc/len)/(len*len),(-yc*zc/len)/(len*len),
+                                          -1/(zc*zc),0,2xc/(zc*zc*zc),0,-1/(zc*zc),2yc/(zc*zc*zc),(-xc*zc/len)/(len*len),(-yc*zc/len)/(len*len),(len-zc*zc/len)/(len*len));
+
+    glm::mat3x9 dJ2r_dcen3c = glm::mat3x9(0,0,-1/(zc*zc),0,0,0,0,0,0,
+                                          0,0,0,0,0,-1/(zc*zc),0,0,0,
+                                          -1/(zc*zc),0,2xc/(zc*zc*zc),0,-1/(zc*zc),2yc/(zc*zc*zc),0,0,0);
+
+    glm::mat3x9 dJ2p_dcen3c = glm::mat3x9(0,0,-1*fx/(zc*zc),0,0,0,0,0,0,
+                                          0,0,0,0,0,-1*fy/(zc*zc),0,0,0,
+                                          -1*fx/(zc*zc),0,2xc*fx/(zc*zc*zc),0,-1*fy/(zc*zc),2yc*fy/(zc*zc*zc),0,0,0); 
+                                
+    //obtain matrix version of dl_dcen2p,dcen2p_dcen3c
+    glm::vec2 dl_dcen2p = glm::vec2(dl_dcenp2d[idx*2],dl_dcenp2d[idx*2+1]);
+    glm::mat3x2 dcen2p_dcen3c = glm::mat3x2(fx/zc,0,
+                                            0,fy/zc,
+                                            -fx*xc/(zc*zc),-fy*yc/(zc*zc));                                 
+    //compute dl_den3c
+    glm::vec3 dl_dcen3c = dLdJ3R*dJ3r_dcen3c + dLdJ2R*dJ2r_dcen3c + dLdJ2P*dJ2p_dcen3c + dl_dcen2p*dcen2p_dcen3c;
+
+  //obtain dl_dcen3w        
+    glm::vec3 dl_dcen3w = glm::transpose(W)*dl_dcen3c;
+
+// transfer data 
+    dL_dcov3w[idx*6] = dl_dcov3w[0][0];
+    dL_dcov3w[idx*6+1] = dl_dcov3w[1][0];
+    dL_dcov3w[idx*6+2] = dl_dcov3w[2][0];
+    dL_dcov3w[idx*6+3] = dl_dcov3w[1][1];
+    dL_dcov3w[idx*6+4] = dl_dcov3w[2][1]; 
+    dL_dcov3w[idx*6+5] = dl_dcov3w[2][2];
+
+    dL_dcen3w[idx*3] = dl_dcen3w[0];
+    dL_dcen3w[idx*3+1] = dl_dcen3w[1];
+    dL_dcen3w[idx*3+2] = dl_dcen3w[2];
+                                          
+  }
+
+
 __global__ void backward(
   const int gaussian_num,
   const int image_height,
@@ -72,36 +199,39 @@ __global__ void backward(
     return;
     }
     const int Idx = image_y*image_width+image_x;
-//根据公式dchanch_dalphai = Ti(ci[ch]-cbehind[ch])
-    float T = Tfinal;
-    float cbehind[3] = 0;
-    float dchan_dalpha[3*gaussian_num]=0;
 
-    //用于累加梯度的中间变量
+//链式法则dl_da = for(pixel in all)for(ch in all),atomicAdd(,dl_dpixel[ch]*dchan[ch]_dalpha*dalpha_da)
+    //最后链式法则求dl_...要用到的中间变量
     float dalpha_dconics[3]=0; 
     float dalpha_dcov3r[6]=0;
     float dalpha_dcov2r[3]=0;
+
+    float T = Tfinal;
+    float cbehind[3] = 0;
+    float dchan_dalpha[3]=0;    
     for(int i=gaussian_num-1;i>=0;i--)
     {
-        //求当前gaussian的透射率 Ti      
+              
         float dx = image_x-means2d[i*2];
         float dy = image_y-means2d[i*2+1];
         float maloh = -0.5*(dx*dx*conics2d[i*3]+
                             2*dx*dy*conics2d[i*3+1]+
                             dy*dy*conics2d[i*3+2]);
         float G =expf(maloh);
-        float alpha = opacity[i]*weights[i]*G;
-        T = T/(1-alpha);
-        //dl_dpixel[ch]代表dl_dchanch
-        //求cbehind,由于color是rgb三通道，所以最后叠加梯度时要三通道；计算dchan_dalpha
+        float alpha = opacity[i]*weights[i]*G;  //当前gaussian的不透明度 alphai
+        T = T/(1-alpha);                        //当前gaussian的透射率 Ti
+
+    //计算dchan_dalpha=Ti(ci[ch]-cbehind[ch])
         for(int ch=0;ch<3;ch++)
         {
             float color = colors[i*3+ch];
             //dchan_dalpha存储方式是通道优先，先通道一中所有gaussian再通道2...
-            dchan_dalpha[ch*gaussian_num+i] = T(color-cbehind[ch]);
+            dchan_dalpha[ch] = T(color-cbehind[ch]);
             cbehind[ch]=cbehind[ch]*(1-alpha)+color*alpha;
         }
 
+
+        //计算dalpha_dopacit
         float dalpha_dopacity = weights[i]*G;
 
         //计算dalpha_dconic,只存上三角区域
@@ -115,10 +245,11 @@ __global__ void backward(
         dalpha_dcov3r = {dcov3r[0][0],dcov3r[0][1],dcov3r[0][2],dcov3r[1][1],dcov3r[1][2],dcov3r[2][2]};
         dalpha_dcov2r = {dcov2r[0][0],dcov2r[0][1],dcov2r[1][1]};
 
-
-
+        //dalpha_dcen2p=alpha*conic*u;
+        float dalpha_dcen2p[2] = {alpha*(dx*conics2d[i*3]+dy*conics2d[i*3+1]),alpha*(dx*conics2d[i*3+1]+dy*conics2d[i*3+2])};
         float dchan_dcolor = T*alpha;
-        //dl_...
+        
+     //dl_...
         //这里对dl_dpixel的索引方式是建立在rgb存储通道优先的假设上的
         for(int c=0;c<3;c++)
         {
@@ -132,6 +263,10 @@ __global__ void backward(
            for(int j=0;j<6;j++)
            {
             atomicAdd(&dl_dcovr3d[i*6+j],dl_dpixel[Idx*3+c]*dchan_dalpha[c]*dalpha_dcov3r[j]);
+           }
+           for(int j=0;j<2;j++)
+           {
+            atomicAdd(&dl_dcenp2d[i*2+j],dl_dpixel[Idx*3+c]*dchan_dalpha[c]*dalpha_dcen2p[j]);
            }           
 
         }

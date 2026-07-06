@@ -106,6 +106,7 @@ __gloabl__  void preprocess_render(
   const float* __restrict__ mean3d,
   const float* __restrict__ viewmatrix,
   const float* __restrict__ projmatrix,
+  const int N,
   const int height,
   const int width,
   const float fx,
@@ -115,7 +116,7 @@ __gloabl__  void preprocess_render(
   float* __restrict__ weights
 ){
   auto idx = blockIdx.x * blockDim.x+ threadIdx.x;
-  if(idx>=gaussian){return;}
+  if(idx>=N){return;}
 
   //PREPARE MEANS2D
   float3 point_ori = {mean3d[idx*3],mean3d[idx*3+1],mean3d[idx*3+2]};
@@ -188,6 +189,7 @@ preprocess_render<<<(N+255)/256,256>>>(
   mean3d.contiguous().data_ptr<float>(),
   viewmatrix.contiguous().data_ptr<float>(),
   projmatrix.contiguous().data_ptr<float>(),
+  N,
   height,
   width,
   fx,

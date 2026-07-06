@@ -7,5 +7,6 @@ paperbox/
 keyboard/
 *.zip
 *.deb
+*.so
 third_party/
 manual_grad_3dgs.py
