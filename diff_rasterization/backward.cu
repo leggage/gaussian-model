@@ -46,6 +46,25 @@ __global__ void grad_kernel(
     }
 }
 
+__focreinline__ __device__ void computeRfromq(float4& q, float* R)
+{
+    float qr = q.x;
+    float qi = q.y;
+    float qj = q.z;
+    float qk = q.w;
+    R[0] = 2*(0.5-(qj*qj+qk*qk));
+    R[1] = 2*(qi*qj-qr*qk);
+    R[2] = 2*(qi*qk+qr*qj);
+    R[3] = 2*(qi*qj+qr*qk);
+    R[4] = 2*(0.5-(qi*qi+qk*qk));
+    R[5] = 2*(qj*qk-qr*qi);
+    R[6] = 2*(qi*qk-qr*qj);
+    R[7] = 2*(qj*qk+qr*qi);
+    R[4] = 2*(0.5-(qi*qi+qj*qj));
+}
+
+
+
 __global__ void preprocess(
   const int gaussian_num,
   const int fx,
@@ -56,11 +75,16 @@ __global__ void preprocess(
   const float* __restrict__ cov3w,
   const float* __restrict__ conics2d,
 
+  const float* __restrict__ q,
+  const float* __restrict__ s,
+
   const float* __restrict__ dl_dconics2d,
   const float* __restrict__ dl_dcovr3d,
   const float* __restrict__ dl_dcovr2d,
   const float* __restrict__ dl_dcenp2d,
-  float* __restrict__ dL_dcov3w,
+
+  float* __restrict__ dl_dq,
+  float* __restrict__ dl_ds,
   float* __restrict__ dL_dcen3w)
   {
     auto idx = blockIdx.x * blockDim.x+ threadIdx.x;
@@ -108,7 +132,41 @@ __global__ void preprocess(
     glm::mat3 dl_dcov3w_cov2r = glm::transpose(M)*dldcov2r*M;
     //TOTAL dl_dcov3w
     glm::mat3 dl_dcov3w  = dl_dcov3w_conic+dl_dcov3w_cov3r+dl_dcov3w_cov2r;
+
+//obtain dl_dq and dl_ds from  dl_dcov3w
+    //obtain dl_dM,M=RS
+    float4 q4 = {q[idx*4],q[idx*4+1],q[idx*4+2],q[idx*4+3]};
+    float R[9]=0;
+    computeRfromq(q4,R);
+         // glm::mat3 RT = glm::mat3(R[0],R[3],R[6],R[1],R[4],R[7],R[2],R[5],R[8]);
+    glm::mat3 M = glm::mat3(s[idx*3+0]*R[0],s[idx*3+0]*R[3],s[idx*3+0]*R[6],
+                            s[idx*3+1]*R[1],s[idx*3+1]*R[4],s[idx*3+1]*R[7],
+                            s[idx*3+2]*R[2],s[idx*3+2]*R[5],s[idx*3+2]*R[8]);
+    glm::mat3 dl_dM = 2*dl_dcov3w*M;
     
+    //obtain dl_ds = dl_dM * dM_ds
+    float dl_dsx = dl_dM[0][0]*R[0]+dl_dM[0][1]*R[3]+dl_dM[0][2]*R[6];
+    float dl_dsy = dl_dM[1][0]*R[1]+dl_dM[1][1]*R[4]+dl_dM[1][2]*R[7];
+    float dl_dsz = dl_dM[2][0]*R[2]+dl_dM[2][1]*R[5]+dl_dM[2][2]*R[8];
+
+    //obtain dl_dq = dl_dM * dM_dq
+    float dldm[9] = {dl_dM[0][0],dl_dM[1][0],dl_dM[2][0],
+                     dl_dM[0][1],dl_dM[1][1],dl_dM[2][1],
+                     dl_dM[0][2],dl_dM[1][2],dl_dM[2][2]};
+    float qr = q[idx*4];
+    float qi = q[idx*4+1];
+    float qj = q[idx*4+2];
+    float qk = q[idx*4+3];
+
+    float sx = s[idx*3+0];
+    float sy = s[idx*3+1];
+    float sz = s[idx*3+2];
+
+
+    float dl_dqr = 2*(-sy*qk*dldm[1]+sz*qj*dldm[2]+sx*qk*dldm[3]-sz*qi*dldm[5]-sx*qj*dldm[6]+sy*qi*dldm[7]);
+    float dl_dqi = 2*(sy*qj*dldm[1]+sz*qk*dldm[2]+sx*qj*dldm[3]-2*sy*qi*dldm[4]-sy*qr*dldm[5]+sx*qk*dldm[6]+sy*qr*dldm[7]-2*sz*qi*dldm[8]);
+    float dl_dqj = 2*(-2*sx*qj*dldm[0]+sy*qi*dldm[1]+sz*qr*dldm[2]+sx*qi*dldm[3]+sz*qk*dldm[5]-sx*qr*dldm[6]+sy*qk*dldm[7]-2*sz*qj*dldm[8]);
+    float dl_dqk = 2*(-2*sx*qk*dldm[0]-sy*qr*dldm[1]+sz*qi*dldm[2]+sx*qr*dldm[3]-2*sy*qk*dldm[4]+sz*qj*dldm[5]+sx*qi*dldm[6]+sy*qj*dldm[7]);
 
 
 //compute dl_dcen3w
@@ -152,19 +210,21 @@ __global__ void preprocess(
     glm::mat3x2 dcen2p_dcen3c = glm::mat3x2(fx/zc,0,
                                             0,fy/zc,
                                             -fx*xc/(zc*zc),-fy*yc/(zc*zc));                                 
-    //compute dl_den3c
+    //compute dl_dcen3c
     glm::vec3 dl_dcen3c = dLdJ3R*dJ3r_dcen3c + dLdJ2R*dJ2r_dcen3c + dLdJ2P*dJ2p_dcen3c + dl_dcen2p*dcen2p_dcen3c;
 
   //obtain dl_dcen3w        
     glm::vec3 dl_dcen3w = glm::transpose(W)*dl_dcen3c;
 
 // transfer data 
-    dL_dcov3w[idx*6] = dl_dcov3w[0][0];
-    dL_dcov3w[idx*6+1] = dl_dcov3w[1][0];
-    dL_dcov3w[idx*6+2] = dl_dcov3w[2][0];
-    dL_dcov3w[idx*6+3] = dl_dcov3w[1][1];
-    dL_dcov3w[idx*6+4] = dl_dcov3w[2][1]; 
-    dL_dcov3w[idx*6+5] = dl_dcov3w[2][2];
+    dl_dq[idx*4] = dl_dqr;
+    dl_dq[idx*4+1] = dl_dqi;
+    dl_dq[idx*4+2] = dl_dqj;
+    dl_dq[idx*4+3] = dl_dqk;
+
+    dl_ds[idx*3] = dl_dsx;
+    dl_ds[idx*3+1] = dl_dsy;
+    dl_ds[idx*3+2] = dl_dsz;
 
     dL_dcen3w[idx*3] = dl_dcen3w[0];
     dL_dcen3w[idx*3+1] = dl_dcen3w[1];
@@ -187,7 +247,7 @@ __global__ void backward(
   float* __restrict__ dl_dcolor;
   float* __restrict__ dl_dopacity;
   float* __restrict__ dl_dconics2d,
-  float* __restrict__ dl_dcovr3d,
+  float* __restrict__ dl_dcovr3d, 
   float* __restrict__ dl_dcovr2d,
   float* __restrict__ dl_dcenp2d,
 
@@ -206,7 +266,7 @@ __global__ void backward(
     float dalpha_dcov3r[6]=0;
     float dalpha_dcov2r[3]=0;
 
-    float T = Tfinal;
+    float T = Tfinal[Idx];
     float cbehind[3] = 0;
     float dchan_dalpha[3]=0;    
     for(int i=gaussian_num-1;i>=0;i--)
