@@ -10,7 +10,7 @@ setup(
     ext_modules=[
         CUDAExtension(
                 name='cuda_rasterization',
-                sources=['ext.cpp', 'forward.cu','backward.cu'],
+                sources=['ext.cpp', 'forward.cu','backward.cu','rasterize_impl.cu','rasterize_point.cu'],
                 include_dirs=[str(this_dir / 'third_party')],
                 extra_compile_args={'cxx': ['-g'],
                                     'nvcc': ['-O2']},

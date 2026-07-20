@@ -2,12 +2,98 @@
 from math import exp, pi, sqrt
 from operator import inv
 from turtle import end_fill
+from cupy import float32
 from pandas.io.formats.style import plt
 from numpy import dtype
+import numpy as np
 import torch
+from pathlib import Path
 from util_vis import draw_camera, visualize_gaussian as gvs
 import open3d as o3d
+import pycolmap
 ###for a gaussian in a frame ,
+
+
+class Gaussianmodel:
+    def __init__(self) -> None:
+        self.cen3w = None
+        self.q = None
+        self.s = None
+        self.color = None
+        self.opacity = None
+        self.num = None
+        pass
+
+    def CreateFromPcd(self,point3D):
+        point3d = []
+        for point in point3D.values():
+            point3d.append(point)
+        N = len(point3d)
+        self.num = N
+        xyz = np.stack([point.xyz for point in point3d],axis=0).astype(np.float32)
+        color = np.stack([point.color for point in point3d],axis=0).astype(np.float32)/255.0
+        print("xyz",xyz)
+        print('color',color)
+        self.cen3w = torch.from_numpy(xyz).cuda().requires_grad_(True)
+        self.color = torch.from_numpy(color).cuda().requires_grad_(True)
+
+        self.q = torch.zeros([N,4],dtype=torch.float32).cuda().requires_grad_(True)
+        self.s = torch.ones([N,3],dtype=torch.float32).cuda().requires_grad_(True)
+        self.opacity = torch.ones([N,1],dtype=torch.float32).cuda().requires_grad_(True)
+
+
+class Camera:
+    def __init__(self) -> None:
+        self.viewmatrix = None
+        self.projmatrix = None
+        self.fx = None
+        self.fy = None
+        self.gtproj = None
+        self.num = None
+        pass
+    
+    def createfromsfm(self,cameras,images,imagedir):
+        gtproj = []
+        viewmatrix=[]
+        projmatrix=[]
+        fx=[]
+        fy=[]
+        zf = 1
+        zn = 0
+        for im in images.values():
+            if not im.has_pose:
+                continue
+            image_path = imagedir / im.name
+            image = np.asarray(o3d.io.read_image(str(image_path)))
+            gtproj.append(image)
+
+            camera = cameras[im.camera_id]
+
+            fx.append(camera.params[0])
+            fy.append(camera.params[0])
+            width = camera.width
+            height = camera.height
+            W = np.eye(4,dtype=np.float32)
+            W[:3,:] = im.cam_from_world().matrix()
+
+
+            fullproj = torch.tensor([[camera.params[0]/(width/2),0,0,0],[0,camera.params[0]/(height/2),0,0],[0,0,zf/(zf-zn),-zn*zf/(zf-zn)],[0,0,1,0]])
+            viewmatrix.append(W)
+            projmatrix.append(fullproj@W)
+        
+        self.viewmatrix = viewmatrix
+        self.projmatrix = projmatrix
+        self.fx = fx
+        self.fy = fy
+        self.gtproj = gtproj
+        self.num = len(gtproj)
+
+
+            
+            
+            
+
+
 
 class GaussianModel:
     def __init__(self,cenp,cov,color,opacity) -> None:
@@ -82,7 +168,8 @@ def rasterization(image,gaussian_list,K):
     return image_processed
 
 
-if __name__ == "__main__":
+
+def main():
     cenp = torch.tensor([1,2,3],dtype = torch.float32)
     cenp1 = torch.tensor([4,1,5],dtype = torch.float32)
 
@@ -99,6 +186,7 @@ if __name__ == "__main__":
     c1 = torch.tensor([0,0,5],dtype = torch.float32)
     intrinsic = torch.tensor([[256,0,256],[0,256,256],[0,0,1]],dtype = torch.float32)
 
+
     gs = GaussianModel(cenp,cov_s,color1,opacity)
     gs1 = GaussianModel(cenp1,cov_s1,color2,opacity)   
     gs._o2c(w,c)
@@ -111,7 +199,6 @@ if __name__ == "__main__":
     
     rgbimg = torch.rand(512,512,3)
 
-
     plt.subplot(1,2,1)
     plt.title("original")
     plt.imshow(rgbimg)
@@ -122,15 +209,6 @@ if __name__ == "__main__":
     plt.imshow(rendered_image)
 
     plt.show()
-
-
-
-
-
-
-
-
-
 
 
 
@@ -155,4 +233,21 @@ if __name__ == "__main__":
     # print(res)
 
     # foot = gs.footprint(pixel)
-    # print(foot)
+    # print(foot)    
+
+def createfromcolmap():
+    modelPath = r'keyboard/sparse/0'
+    rec = pycolmap.Reconstruction(modelPath)
+    gaussian = Gaussianmodel()
+    gaussian.CreateFromPcd(rec.points3D)
+    camera = Camera()
+    imagedir = Path("keyboard/images")
+    camera.createfromsfm(rec.cameras,rec.images,imagedir)
+    print(camera.gtproj.shape)
+    # K = np.asarray(rec.cameras[1].calibration_matrix())
+    # print(K)
+
+if __name__ == "__main__":
+    createfromcolmap()
+
+    # main()

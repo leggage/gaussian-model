@@ -21,3 +21,32 @@ torch::Tensor backward_cuda(
     int64_t width,
     int64_t height
 );
+
+torch::Tensor render_forward_v2(
+    torch::Tensor colors,
+    torch::Tensor opacity,
+    torch::Tensor mean3d,
+    torch::Tensor q,      //顺序依次为qr\qi\qj\qk
+    torch::Tensor s,
+    torch::Tensor viewmatrix,
+    torch::Tensor projmatrix,
+    int64_t height,
+    int64_t width,
+    float fx,
+    float fy);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+backward_v2(
+    torch::Tensor dl_dpixel,
+    torch::Tensor Tfinal,
+    torch::Tensor colors,
+    torch::Tensor opacity,
+    torch::Tensor mean3d,
+    torch::Tensor q,      //顺序依次为qr\qi\qj\qk
+    torch::Tensor s,
+    torch::Tensor viewmatrix,
+    torch::Tensor projmatrix,
+    int64_t height,
+    int64_t width,
+    float fx,
+    float fy);

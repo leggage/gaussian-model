@@ -22,6 +22,9 @@ geometries = []
 # 1. COLMAP sparse points.
 points = np.array([p.xyz for p in rec.points3D.values()], dtype=np.float64)
 colors = np.array([p.color for p in rec.points3D.values()], dtype=np.float64) / 255.0
+print("point",rec.points3D.values().xyz)
+# print("point",points)
+print("colors","colors")
 
 point_cloud = o3d.geometry.PointCloud()
 point_cloud.points = o3d.utility.Vector3dVector(points)
@@ -38,6 +41,7 @@ for image in rec.images.values():
 
     R = np.asarray(pose.rotation.matrix(), dtype=np.float32)
     t = np.asarray(pose.translation, dtype=np.float32).reshape(3)
+    print("R",R,'T',t)
     K = np.asarray(camera.calibration_matrix(), dtype=np.float32)
 
     image_path = IMAGE_DIR / image.name
