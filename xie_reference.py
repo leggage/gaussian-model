@@ -1,0 +1,279 @@
+import cupy as cp
+import numpy as np
+from gaussian_model import GaussianModel
+import torch
+import  matplotlib.pyplot as plt
+from math import exp, pi, sqrt
+_KERNEL_CODE = r'''
+extern "C" __global__
+void render_alpha_blending(
+    const int gaussian_num,
+    const int height,
+    const int width,    
+    const float* __restrict__ k_inv,
+    const float* __restrict__ weights,    
+    const float* __restrict__ centers,
+    const float* __restrict__ inv_covs,
+    const float* __restrict__ colors,
+    float* __restrict__ image)
+{
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height) {
+        return;
+    }
+
+    const float px = (float)x;
+    const float py = (float)y;
+
+    const float ray_x = k_inv[0] * px + k_inv[1] * py + k_inv[2];
+    const float ray_y = k_inv[3] * px + k_inv[4] * py + k_inv[5];
+    const float ray_z = k_inv[6] * px + k_inv[7] * py + k_inv[8];
+    const float inv_ray_z = 1.0f / ray_z;
+    const float pos_x = ray_x * inv_ray_z;
+    const float pos_y = ray_y * inv_ray_z;
+
+    float out_r = 0.0f;
+    float out_g = 0.0f;
+    float out_b = 0.0f;
+    float transmittance = 1.0f;
+
+    for (int i = 0; i < gaussian_num; ++i) {
+        const float dx = pos_x - centers[i * 2 + 0];
+        const float dy = pos_y - centers[i * 2 + 1];
+
+        const float a = inv_covs[i * 4 + 0];
+        const float b = inv_covs[i * 4 + 1];
+        const float c = inv_covs[i * 4 + 2];
+        const float d = inv_covs[i * 4 + 3];
+        const float mahalanobis = dx * (a * dx + b * dy) + dy * (c * dx + d * dy);
+        const float alpha = weights[i] * expf(-0.5f * mahalanobis);
+
+        out_r += colors[i * 3 + 0] * transmittance * alpha;
+        out_g += colors[i * 3 + 1] * transmittance * alpha;
+        out_b += colors[i * 3 + 2] * transmittance * alpha;
+        transmittance *= (1.0f - alpha);
+    }
+
+    const int offset = (y * width + x) * 3;
+    image[offset + 0] = out_r;
+    image[offset + 1] = out_g;
+    image[offset + 2] = out_b;
+}
+'''
+
+
+_kernel_code = r"""
+extern "C" __global__
+void rasterization(int gaussian_num,int image_height,int image_width,float *inv_k,float *weight,float*cen,float*cov,float*colors,float* image){
+
+
+    float image_x = blockIdx.x*blockDim.x+threadIdx.x;
+    float image_y = blockIdx.y*blockDim.y+threadIdx.y;
+
+
+    float ray_x = image_x*inv_k[0]+image_y*inv_k[1]+inv_k[2];
+    float ray_y = image_x*inv_k[3]+image_y*inv_k[4]+inv_k[5];
+
+    float out_r = 0.0f;
+    float out_g = 0.0f;
+    float out_b = 0.0f;
+    float T =1;
+    for(int i=0;i<gaussian_num;++i){
+        float dx = ray_x - cen[2*i];
+        float dy = ray_y - cen[2*i+1];
+
+        float mahlo = dx*dx*cov[i*4]+dx*dy*(cov[i*4+1]+cov[i*4+2])+dy*dy*cov[i*4+3];
+        float alpha = weight[i]*expf(-0.5*mahlo);
+
+
+        out_r += colors[i * 3 + 0] * T * alpha;
+        out_g += colors[i * 3 + 1] * T * alpha;
+        out_b += colors[i * 3 + 2] * T* alpha;
+
+        T = T*(1-alpha);      
+    }
+    const int offset = (image_y * image_width + image_x) * 3;
+    image[offset + 0] = out_r;
+    image[offset + 1] = out_g;
+    image[offset + 2] = out_b;
+}
+
+
+"""
+
+render_gpt = cp.RawKernel(_KERNEL_CODE,"render_alpha_blending")
+
+render_kernel = cp.RawKernel(_kernel_code,"rasterization")
+
+def _normalize_for_display(image):
+    if hasattr(image, "detach"):
+        image = image.detach().cpu().numpy()
+    image = np.asarray(image)
+    return (image - image.min()) / (image.max() - image.min() + 1e-8)
+def _as_numpy(value, dtype=np.float32):
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value, dtype=dtype)
+
+
+def build_color_blend_coefficients(
+    height, width, inv_k, weights, centers, inv_covs
+):
+    """Compute the color-independent part of alpha blending with Torch."""
+    device = weights.device
+    dtype = weights.dtype
+    ys, xs = torch.meshgrid(
+        torch.arange(height, device=device, dtype=dtype),
+        torch.arange(width, device=device, dtype=dtype),
+        indexing="ij",
+    )
+
+    ray_x = xs * inv_k[0] + ys * inv_k[1] + inv_k[2]
+    ray_y = xs * inv_k[3] + ys * inv_k[4] + inv_k[5]
+    dx = ray_x.unsqueeze(-1) - centers[:, 0]
+    dy = ray_y.unsqueeze(-1) - centers[:, 1]
+
+    mahalanobis = (
+        dx * dx * inv_covs[:, 0]
+        + dx * dy * (inv_covs[:, 1] + inv_covs[:, 2])
+        + dy * dy * inv_covs[:, 3]
+    )
+    alpha = weights * torch.exp(-0.5 * mahalanobis)
+
+    transmittance = torch.cumprod(
+        torch.cat(
+            [
+                torch.ones((*alpha.shape[:-1], 1), device=device, dtype=dtype),
+                1.0 - alpha[..., :-1],
+            ],
+            dim=-1,
+        ),
+        dim=-1,
+    )
+    return transmittance * alpha
+
+
+def render_colors_torch(blend_coefficients, colors):
+    """Render colors while preserving the autograd graph for ``colors``."""
+    return blend_coefficients @ colors
+
+
+if __name__ == "__main__":
+
+    cenp = torch.tensor([1, 2, 3], dtype=torch.float32)
+    cenp1 = torch.tensor([4, 1, 5], dtype=torch.float32)
+    cenp2 = torch.tensor([2, 2, 0], dtype=torch.float32)
+
+    cov_s = torch.tensor([[1, 0, 0], [0, 3, 0], [0, 0, 4]], dtype=torch.float32)
+    cov_s1 = torch.tensor([[2, 0, 0], [0, 2, 0], [0, 0, 4]], dtype=torch.float32)
+    cov_s2 = torch.tensor([[0.5, 0, 0], [0, 1, 0], [0, 0, 6]], dtype=torch.float32)
+
+    color1 = torch.tensor([0.1, 0.4, 0.7], dtype=torch.float32)
+    color2 = torch.tensor([0.7, 0.3, 0.2], dtype=torch.float32)
+    color3 = torch.tensor([0.4, 0.7, 0.2], dtype=torch.float32) 
+
+    opacity = 0.9
+
+    w = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
+    c = torch.tensor([-1, -2, 2], dtype=torch.float32)
+    intrinsic = torch.tensor([[50, 0, 256], [0, 50, 256], [0, 0, 1]], dtype=torch.float32)
+
+    gs = GaussianModel(cenp, cov_s, color1, opacity)
+    gs1 = GaussianModel(cenp1, cov_s1, color2, opacity)
+    gs2 = GaussianModel(cenp2, cov_s2, color3, opacity)
+    gs._o2c(w, c)
+    gs._c2r()
+    gs1._o2c(w, c)
+    gs1._c2r()
+    gs2._o2c(w, c)
+    gs2._c2r()
+    gaussian_list = [gs, gs1,gs2]
+
+    block_size = cp.asarray([16,16],dtype = int)
+
+    image = cp.empty((512,512,3),dtype =cp.float32)
+    height = image.shape[0]
+    width = image.shape[1]
+
+    inv_k = cp.asarray(np.linalg.inv(_as_numpy(intrinsic)), dtype=cp.float32).reshape(-1)
+    # inv_k  = cp.asarray(torch.inverse(intrinsic).reshape(-1))
+
+    cens = []
+    inv_covs = []
+    weights = []
+    colors = []
+
+    for gaussian in gaussian_list:
+        cens.append(np.asarray(gaussian._cen_ray[:2]).reshape(-1))
+
+        cov2d = gaussian._cov_ray[:2,:2]
+        weight = 1/(sqrt((2*pi)**3*torch.det(cov2d))*torch.det(torch.inverse(gaussian._jco))*torch.det(torch.inverse(gaussian._w_cam)))
+        weights.append(weight)
+
+        inv_cov = np.asarray(torch.inverse(cov2d)).reshape(-1)
+        inv_covs.append(inv_cov)
+
+        colors.append(np.asarray(gaussian._col).reshape(-1))
+
+
+    cens = cp.asarray(cens, dtype=cp.float32)
+    inv_covs = cp.asarray(inv_covs, dtype=cp.float32)
+    weights = cp.asarray(weights, dtype=cp.float32)
+    colors = cp.asarray(colors, dtype=cp.float32)
+
+    block = (int(block_size[0]), int(block_size[1]))
+    grid = ((width + block[0] - 1) // block[0], (height + block[1] - 1) // block[1])
+    # print("grid:",grid)
+    # print("block",block)
+    # print("inv_k:",inv_k)
+    # print("weights:",weights)
+    # print("cens:",cens)
+    # print("inv_covs:",inv_covs)
+    # print("colors:",colors)
+    render_kernel(grid,block,(len(gaussian_list),height,width,inv_k,weights,cens,inv_covs,colors,image))
+
+    # DLPack only shares the CUDA memory; it does not make RawKernel
+    # differentiable. These tensors are constants, so sharing is sufficient.
+    inv_k_torch = torch.from_dlpack(inv_k)
+    weights_torch = torch.from_dlpack(weights)
+    cens_torch = torch.from_dlpack(cens)
+    inv_covs_torch = torch.from_dlpack(inv_covs)
+    gt_image = torch.from_dlpack(image).detach().clone()
+
+    with torch.no_grad():
+        blend_coefficients = build_color_blend_coefficients(
+            height,
+            width,
+            inv_k_torch,
+            weights_torch,
+            cens_torch,
+            inv_covs_torch,
+        )
+
+    pr_colors = torch.nn.Parameter(
+        torch.rand(
+            len(gaussian_list),
+            3,
+            device=gt_image.device,
+            dtype=gt_image.dtype,
+        )
+    )
+    optimizer = torch.optim.Adam([pr_colors], lr=0.05)
+
+    for step in range(1000):
+        optimizer.zero_grad()
+        pr_image = render_colors_torch(blend_coefficients, pr_colors)
+        loss = torch.mean((pr_image - gt_image) ** 2)
+        loss.backward()
+        optimizer.step()
+
+        if step % 100 == 0:
+            print(
+                f"step={step:04d}, loss={loss.item():.8f}, "
+                f"grad_norm={pr_colors.grad.norm().item():.8f}"
+            )
+
+    print("target colors:\n", torch.from_dlpack(colors))
+    print("optimized colors:\n", pr_colors.detach())
