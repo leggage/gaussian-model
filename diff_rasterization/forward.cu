@@ -28,6 +28,7 @@ render_forward(
   const uint2* __restrict__ ranges,
   const uint64_t* __restrict__ point_list,
   float* __restrict__ Tfinal,
+  uint32_t* __restrict__ ncontributor,
   float* __restrict__ image) {
 const int image_x = blockIdx.x * blockDim.x + threadIdx.x;
 const int image_y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -48,7 +49,7 @@ int rounds = (gaussian_num+255)/256;
 __shared__ float collected_conic[BlockSize_x*BlockSize_y*3];
 __shared__ float collected_weight[BlockSize_x*BlockSize_y];
 __shared__ float collected_opacity[BlockSize_x*BlockSize_y];
-__shared__ float collected_cen2p[BlockSize_x*BlockSize_y];
+__shared__ float collected_cen2p[BlockSize_x*BlockSize_y*2];
 __shared__ float collected_color[BlockSize_x*BlockSize_y*3];
 
 float out_r = 0.0f;
@@ -64,7 +65,7 @@ for(int i=0;i<rounds;i++,todo-=BlockSize_x*BlockSize_y)
   bool valid = gaussian_offset < gaussian_num;
   if(valid)
   {
-    int off = rangex+collected_id;      
+    int off = rangex+gaussian_offset;      
     int gaussianid  = point_list[off];
     collected_conic[collected_id*3+0] = conics2d[gaussianid*3+0];
     collected_conic[collected_id*3+1] = conics2d[gaussianid*3+1];
@@ -106,8 +107,9 @@ for(int i=0;i<rounds;i++,todo-=BlockSize_x*BlockSize_y)
       out_b += collected_color[j * 3 + 2] * transmittance * alpha;
     
       transmittance *= (1.0f - alpha);
-
+      last_contributor = contributor;
     }
+    ncontributor[idx] = last_contributor;
     Tfinal[idx] = transmittance;
     const int offset = (image_y * image_width + image_x) * 3;
     image[offset + 0] = out_r;
@@ -206,7 +208,7 @@ __global__ void preprocess_forward(
   float mid = (cov2d_p.x+cov2d_p.z)/2;
   float lambda1 = mid+sqrt(mid*mid-(cov2d_p.x*cov2d_p.z-cov2d_p.y*cov2d_p.y));
   float lambda2 = mid-sqrt(mid*mid-(cov2d_p.x*cov2d_p.z-cov2d_p.y*cov2d_p.y));
-  radii[idx] = max(0.1,max(lambda1,lambda2));
+  radii[idx] = max(0.1,3*sqrt(max(lambda1,lambda2)));
 
   uint2 rctmin;
   uint2 rctmax;
@@ -295,6 +297,7 @@ void Forward::render(
   const dim3 grid,
   const dim3 block,  
   float* __restrict__ Tfinal,
+  uint32_t* __restrict__ ncontributor,
   float* __restrict__ image
 
 )
@@ -310,6 +313,7 @@ void Forward::render(
     ranges,
     point_list,
     Tfinal,
+    ncontributor,
     image
   );
 }

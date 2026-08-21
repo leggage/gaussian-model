@@ -14,6 +14,7 @@ namespace Forward{
         const dim3 grid,
         const dim3 block,  
         float* __restrict__ Tfinal,
+        uint32_t* __restrict__ ncontributor,
         float* __restrict__ image
       );
 

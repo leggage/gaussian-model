@@ -1,12 +1,10 @@
 
 #include <torch/extension.h>
 
-#include "wrapper.h"
+#include "rasterize_point.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  // m.def("rasterize_gaussians", &render_forward_cuda);
-  m.def("rasterize_gaussians", &render_forward_v2);
-  m.def("grad_compute",&backward_cuda);
-  m.def("grad_compute_v2", &backward_v2);
 
+  m.def("render", &rasterize_gaussian);
+  m.def("backward",&backward_grad);
 }

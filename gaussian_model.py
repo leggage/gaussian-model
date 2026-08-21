@@ -1,13 +1,14 @@
 
 from math import exp, pi, sqrt
 from operator import inv
-from turtle import end_fill
+
 from cupy import float32
 from pandas.io.formats.style import plt
 from numpy import dtype
 import numpy as np
 import torch
 from pathlib import Path
+
 from util_vis import draw_camera, visualize_gaussian as gvs
 import open3d as o3d
 import pycolmap
@@ -32,8 +33,8 @@ class Gaussianmodel:
         self.num = N
         xyz = np.stack([point.xyz for point in point3d],axis=0).astype(np.float32)
         color = np.stack([point.color for point in point3d],axis=0).astype(np.float32)/255.0
-        print("xyz",xyz)
-        print('color',color)
+        # print("xyz",xyz)
+        # print('color',color)
         self.cen3w = torch.from_numpy(xyz).cuda().requires_grad_(True)
         self.color = torch.from_numpy(color).cuda().requires_grad_(True)
 
@@ -43,50 +44,51 @@ class Gaussianmodel:
 
 
 class Camera:
-    def __init__(self) -> None:
-        self.viewmatrix = None
-        self.projmatrix = None
-        self.fx = None
-        self.fy = None
-        self.gtproj = None
-        self.num = None
-        pass
-    
-    def createfromsfm(self,cameras,images,imagedir):
-        gtproj = []
-        viewmatrix=[]
-        projmatrix=[]
-        fx=[]
-        fy=[]
-        zf = 1
-        zn = 0
-        for im in images.values():
-            if not im.has_pose:
-                continue
-            image_path = imagedir / im.name
-            image = np.asarray(o3d.io.read_image(str(image_path)))
-            gtproj.append(image)
-
-            camera = cameras[im.camera_id]
-
-            fx.append(camera.params[0])
-            fy.append(camera.params[0])
-            width = camera.width
-            height = camera.height
-            W = np.eye(4,dtype=np.float32)
-            W[:3,:] = im.cam_from_world().matrix()
-
-
-            fullproj = torch.tensor([[camera.params[0]/(width/2),0,0,0],[0,camera.params[0]/(height/2),0,0],[0,0,zf/(zf-zn),-zn*zf/(zf-zn)],[0,0,1,0]])
-            viewmatrix.append(W)
-            projmatrix.append(fullproj@W)
-        
+    def __init__(self,viewmatrix,projmatrix,fx,fy,gtproj,height,width) -> None:
         self.viewmatrix = viewmatrix
         self.projmatrix = projmatrix
         self.fx = fx
         self.fy = fy
         self.gtproj = gtproj
-        self.num = len(gtproj)
+        self.height = height
+        self.width  = width
+        pass
+    
+    # def createfromsfm(self,cameras,images,imagedir):
+    #     gtproj = []
+    #     viewmatrix=[]
+    #     projmatrix=[]
+    #     fx=[]
+    #     fy=[]
+    #     zf = 1
+    #     zn = 0
+    #     for im in images.values():
+    #         if not im.has_pose:
+    #             continue
+    #         image_path = imagedir / im.name
+    #         image = np.asarray(o3d.io.read_image(str(image_path)))
+    #         gtproj.append(image)
+
+    #         camera = cameras[im.camera_id]
+
+    #         fx.append(camera.params[0])
+    #         fy.append(camera.params[0])
+    #         width = camera.width
+    #         height = camera.height
+    #         W = np.eye(4,dtype=np.float32)
+    #         W[:3,:] = im.cam_from_world().matrix()
+
+
+    #         fullproj = torch.tensor([[camera.params[0]/(width/2),0,0,0],[0,camera.params[0]/(height/2),0,0],[0,0,zf/(zf-zn),-zn*zf/(zf-zn)],[0,0,1,0]])
+    #         viewmatrix.append(W)
+    #         projmatrix.append(fullproj@W)
+        
+    #     self.viewmatrix = viewmatrix
+    #     self.projmatrix = projmatrix
+    #     self.fx = fx
+    #     self.fy = fy
+    #     self.gtproj = gtproj
+    #     self.num = len(gtproj)
 
 
             
@@ -244,6 +246,7 @@ def createfromcolmap():
     imagedir = Path("keyboard/images")
     camera.createfromsfm(rec.cameras,rec.images,imagedir)
     print(camera.gtproj.shape)
+    
     # K = np.asarray(rec.cameras[1].calibration_matrix())
     # print(K)
 

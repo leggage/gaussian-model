@@ -1,78 +1,68 @@
 
-import torch
 
+import torch
 
 from . import cuda_rasterization
 
 
+
+
 class rasterizer(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,colors, cens, inv_covs, weights, inv_k, height, width):
+    def forward(ctx,colors,opacity,mean3w,q,s,camera):
 
-        ctx.save_for_backward(cens, inv_covs, weights, inv_k)
+        viewmatrix = camera.viewmatrix.cuda()
+        projmatrix = camera.projmatrix.cuda()
+        height     = camera.height
+        width      = camera.width
+        fx         = camera.fx
+        fy         = camera.fy
+
+        args = (colors,
+                opacity,
+                mean3w,
+                q,      ##顺序依次为qr\qi\qj\qk
+                s,
+                viewmatrix,
+                projmatrix,
+                height,
+                width,
+                fx,
+                fy)
+        
+        num_rendered,rendered_image, image_buffer,geometry_buffer,binning_buffer = cuda_rasterization.render(*args)
+        ctx.num_rendered = num_rendered
+        ctx.fx = fx
+        ctx.fy = fy
         ctx.height = height
-        ctx.width = width
-        return cuda_rasterization.rasterize_gaussians(
-            colors,
-            cens,
-            inv_covs,
-            weights,
-            inv_k,
-            int(height),
-            int(width),
-        )
+        ctx.width  = width
+        ctx.save_for_backward(viewmatrix,projmatrix,image_buffer,binning_buffer,geometry_buffer,colors,opacity,mean3w,q,s)
+        return rendered_image
+        
 
     @staticmethod
     def backward(ctx, grad_outputs):
-        cens, inv_covs, weights, inv_k= ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        N = cens.shape[0]
-        dl_dcolors = cuda_rasterization.grad_compute(
+        viewmatrix,projmatrix,image_buffer,binning_buffer,geometry_buffer,colors,opacity,mean3w,q,s = ctx.saved_tensors
+        args=(
+            ctx.num_rendered,
+            ctx.height,
+            ctx.width,
+            ctx.fx,
+            ctx.fy,
+            viewmatrix,
+            projmatrix,
+            image_buffer,
+            binning_buffer,
+            geometry_buffer,
             grad_outputs,
-            inv_k,
-            weights,
-            cens,
-            inv_covs,
-            3,
-            N,
-            width,
-            height
-        ).cuda()
-        return dl_dcolors,None,None,None,None,None,None
+            colors,
+            opacity,
+            mean3w,
+            q,
+            s
+        )
 
-def render_forward(colors, cens, inv_covs, weights, inv_k, height, width):
-    if not torch.cuda.is_available():
-        raise RuntimeError("render_extension requires CUDA")
-    return cuda_rasterization.rasterize_gaussians(
-        colors,
-        cens,
-        inv_covs,
-        weights,
-        inv_k,
-        int(height),
-        int(width),
-    )
+        dl_dcolor,dl_dopacity,dl_dq,dl_ds,dl_dcen3w = cuda_rasterization.backward(*args)
+        return dl_dcolor,dl_dopacity,dl_dcen3w,dl_dq,dl_ds,None
 
-def render_backward(
-    dl_dpixel,
-    inv_k,
-    weight,
-    cens,
-    covs,
-    chans,
-    gaussian_nums,
-    width,
-    height
-    ):
-    return cuda_rasterization.grad_compute(
-        dl_dpixel,
-        inv_k,
-        weight,
-        cens,
-        covs,
-        chans,
-        gaussian_nums,
-        width,
-        height
-    )
+

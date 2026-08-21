@@ -102,3 +102,16 @@ __forceinline__ __device__ void computeRotation(const float4& q, float* R)
     R[7] = 2.0f * (qj * qk + qr * qi);
     R[8] = 1.0f - 2.0f * (qi * qi + qj * qj);
 }
+
+
+
+#define CHECK_CUDA(A, debug) \
+A; if(debug) { \
+auto ret = cudaDeviceSynchronize(); \
+if (ret != cudaSuccess) { \
+std::cerr << "\n[CUDA ERROR] in " << __FILE__ << "\nLine " << __LINE__ << ": " << cudaGetErrorString(ret); \
+throw std::runtime_error(cudaGetErrorString(ret)); \
+} \
+}
+
+

@@ -22,9 +22,9 @@ geometries = []
 # 1. COLMAP sparse points.
 points = np.array([p.xyz for p in rec.points3D.values()], dtype=np.float64)
 colors = np.array([p.color for p in rec.points3D.values()], dtype=np.float64) / 255.0
-print("point",rec.points3D.values().xyz)
-# print("point",points)
-print("colors","colors")
+# print("point",rec.points3D.values().xyz)
+# # print("point",points)
+# print("colors","colors")
 
 point_cloud = o3d.geometry.PointCloud()
 point_cloud.points = o3d.utility.Vector3dVector(points)

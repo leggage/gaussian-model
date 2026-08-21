@@ -1,10 +1,10 @@
 __pycache__/
 render_extension/build/
+diff_rasterization/build/
 test.json
 visualize.py
 south-building/
 paperbox/
-keyboard/
 *.zip
 *.deb
 *.so
